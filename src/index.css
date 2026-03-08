@@ -1,0 +1,42 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f7f9fb;
+  min-height: 100vh;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Global theme variables */
+:root {
+  --primary-gradient-start: #1A4B8F;
+  --primary-gradient-end: #2E7D8F;
+  --primary-color: #1A4B8F;
+  --primary-hover: #0f3a73;
+  --secondary-color: #00A86B;
+  --secondary-hover: #00965a;
+  --background-light: #ffffff;
+  --background-dark: #1a1a1a;
+  --card-background: linear-gradient(135deg, #1A4B8F 0%, #2E7D8F 90%, #5BA3D1 100%);
+  --card-background-dark: linear-gradient(135deg, #1A4B8F 0%, #2E7D8F 90%, #5BA3D1 100%);
+  --text-primary: #ffffff;
+  --text-primary-dark: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-secondary-dark: rgba(255, 255, 255, 0.8);
+  --border-color: rgba(255, 255, 255, 0.2);
+  --border-color-dark: rgba(255, 255, 255, 0.2);
+  --shadow: 0 8px 32px rgba(26, 75, 143, 0.3), 0 4px 16px rgba(0, 168, 107, 0.2);
+  --shadow-dark: 0 8px 32px rgba(26, 75, 143, 0.4), 0 4px 16px rgba(0, 168, 107, 0.3);
+}
