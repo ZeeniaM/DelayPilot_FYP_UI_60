@@ -297,7 +297,9 @@ const flightsCatalog = [
   { flightNo: 'SN789', airline: 'Brussels Airlines', route: 'BRU → MUC', scheduledTime: '19:15', predictedDelay: 75, delayDuration: '75 min', likelyCause: 'Reactionary', status: 'Major Delay' },
 ];
 
-const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange }) => {
+const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
+  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
+}) => {
   const [query, setQuery] = useState('');
   const [filterAirline, setFilterAirline] = useState('All');
   const [filterSeverity, setFilterSeverity] = useState('All');
@@ -524,7 +526,13 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         onLogout={onLogout}
         activeTab={activeTab}
         onTabChange={onTabChange}
-      />
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
+        />
       <MainContent>
         <ContentArea>
           <HeaderRow>
@@ -898,5 +906,3 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 };
 
 export default MitigationBoard;
-
-

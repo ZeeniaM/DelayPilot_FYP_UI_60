@@ -1,21 +1,19 @@
 /**
  * Dashboard.js
  * ─────────────────────────────────────────────────────────────────
- * Orchestrator: fetches pipeline data once, passes as props to children.
- * Children never fetch independently → single source of truth.
- *
  * Data flow:
- *   Dashboard
- *     → fetchFlights()     → liveFlights  → KPICards, FlightsTable, AlertsPanel
- *     → fetchWeather()     → liveWeather  → WeatherPanel
- *     → computeKPIs()      → liveKPIs     → KPICards
- *     → buildAlerts()      → liveAlerts   → AlertsPanel, KPICards (bell)
+ *   App.js owns: refreshKey, liveAlerts, notifOpen, notifCount
+ *   Dashboard fetches flights + weather, passes results up via:
+ *     onAlertsUpdate(alerts) → App.js stores them → NavBar bell uses them
+ *
+ *   Refresh button: re-increments App-level refreshKey (via onRefreshRequest)
+ *   which triggers useEffect → re-runs load() → re-fetches all data
  * ─────────────────────────────────────────────────────────────────
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import NavigationBar from './NavigationBar';
-import { PageLayout } from './PageLayout';
+import { PageLayoutWithBackground } from './PageLayout';
 import KPICards from './KPICards';
 import FlightsTable from './FlightsTable';
 import WeatherPanel from './WeatherPanel';
@@ -28,50 +26,61 @@ import {
   fetchFlights, fetchWeather, computeKPIs,
 } from '../services/predictionService';
 
-// Build alerts list from delayed flights
+// Build alerts list from delayed flights using status field (matches flights table)
 const buildAlerts = (flights) => {
   if (!flights) return [];
   return flights
-    .filter(f => f.is_delayed_15)
+    .filter(f => f.status === 'Minor Delay' || f.status === 'Major Delay')
     .slice(0, 10)
     .map((f, i) => ({
       id: i + 1,
-      flightNo: f.flightNo,
-      severity: f.is_delayed_30 ? 'high' : 'moderate',
-      message: f.is_delayed_30
-        ? `Major delay predicted (≥30 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`
-        : `Minor delay predicted (≥15 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`,
+      flightNo:  f.flightNo,
+      severity:  f.status === 'Major Delay' ? 'high' : 'moderate',
+      message:   f.status === 'Major Delay'
+        ? `Major delay (≥30 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`
+        : `Minor delay (≥15 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`,
       time: 'just now',
     }));
 };
 
-const Dashboard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange }) => {
+const Dashboard = ({
+  userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
+  // Bell props from App.js — passed straight through to NavigationBar
+  notifCount, hasNewNotif, notifOpen, liveAlerts: appAlerts,
+  onNotifClick, onNotifClose,
+  // Refresh wiring from App.js
+  refreshKey = 0, onRefreshRequest, onAlertsUpdate,
+}) => {
   const [liveFlights, setLiveFlights] = useState(null);
   const [liveWeather, setLiveWeather] = useState(null);
   const [liveKPIs,    setLiveKPIs]    = useState(null);
-  const [liveAlerts,  setLiveAlerts]  = useState([]);
-  const [refreshKey,  setRefreshKey]  = useState(0);
+  const [loading,     setLoading]     = useState(false);
 
   const load = useCallback(async () => {
-    const [flights, weather] = await Promise.all([
-      fetchFlights(),
-      fetchWeather(),
-    ]);
+    setLoading(true);
+    try {
+      const [flights, weather] = await Promise.all([
+        fetchFlights(),
+        fetchWeather(),
+      ]);
 
-    if (flights) {
-      setLiveFlights(flights);
-      setLiveKPIs(computeKPIs(flights));
-      setLiveAlerts(buildAlerts(flights));
+      if (flights) {
+        setLiveFlights(flights);
+        setLiveKPIs(computeKPIs(flights));
+        const alerts = buildAlerts(flights);
+        onAlertsUpdate && onAlertsUpdate(alerts); // push up to App.js
+      }
+      if (weather) setLiveWeather(weather);
+    } finally {
+      setLoading(false);
     }
-    if (weather) setLiveWeather(weather);
-  }, []);
+  }, [onAlertsUpdate]);
 
+  // Re-fetch whenever App.js increments refreshKey
   useEffect(() => { load(); }, [load, refreshKey]);
 
-  const handleRefresh = () => setRefreshKey(k => k + 1);
-
   return (
-    <PageLayout>
+    <PageLayoutWithBackground>
       <PageContainer>
         <NavigationBar
           userRole={userRole}
@@ -79,14 +88,19 @@ const Dashboard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChan
           onLogout={onLogout}
           activeTab={activeTab}
           onTabChange={onTabChange}
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={appAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
         />
         <MainContent>
           <ContentArea>
             <KPICards
-              refreshKey={refreshKey}
-              onRefresh={handleRefresh}
+              loading={loading}
+              onRefresh={onRefreshRequest}   // triggers App-level refreshKey bump
               liveKPIs={liveKPIs}
-              liveAlerts={liveAlerts}
             />
             <VisualAnalytics liveFlights={liveFlights} />
             <FlightsTable liveFlights={liveFlights} />
@@ -95,7 +109,7 @@ const Dashboard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChan
           <WeatherPanel liveWeather={liveWeather} />
         </MainContent>
       </PageContainer>
-    </PageLayout>
+    </PageLayoutWithBackground>
   );
 };
 

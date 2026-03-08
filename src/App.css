@@ -1,8 +1,12 @@
 .App {
   min-height: 100vh;
+  background: #1A4B8F;
+  padding: 0;
+}
+
+/* Applied only when login page is active */
+.App.login-view {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(45deg, #ffffff 50%, #1A4B8F 50%);
-  padding: 20px;
 }

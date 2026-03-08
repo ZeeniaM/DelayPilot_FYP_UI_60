@@ -140,7 +140,10 @@ const LoadingText = styled.div`
   font-size: 14px;
 `;
 
-const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
+const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange,
+  notifCount, hasNewNotif, notifOpen, liveAlerts,
+  onNotifClick, onNotifClose
+}) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -294,6 +297,12 @@ const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
           onLogout={onLogout}
           activeTab={activeTab}
           onTabChange={onTabChange}
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
         />
         <Content>
           <LoadingText>Loading profile...</LoadingText>
@@ -403,4 +412,3 @@ const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
 };
 
 export default Profile;
-

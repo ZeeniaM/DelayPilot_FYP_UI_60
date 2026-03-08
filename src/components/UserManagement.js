@@ -311,7 +311,10 @@ const mockDeletionRequests = [
   { id: 2, userId: 5, username: 'apoc2', name: 'Emily Davis', role: 'APOC', requestTime: '2024-01-15 15:45' },
 ];
 
-const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
+const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
+  notifCount, hasNewNotif, notifOpen, liveAlerts,
+  onNotifClick, onNotifClose
+}) => {
   const [users, setUsers] = useState([]);
   const [deletionRequests, setDeletionRequests] = useState(mockDeletionRequests);
   const [searchQuery, setSearchQuery] = useState('');
@@ -701,7 +704,13 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange }
         onLogout={onLogout}
         activeTab={activeTab}
         onTabChange={onTabChange}
-      />
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
+        />
       <MainContent>
         <ContentArea>
           <HeaderRow>

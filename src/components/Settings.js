@@ -155,7 +155,10 @@ const ToggleSwitch = styled.label`
   }
 `;
 
-const Settings = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
+const Settings = ({ userRole, userName, onLogout, activeTab, onTabChange,
+  notifCount, hasNewNotif, notifOpen, liveAlerts,
+  onNotifClick, onNotifClose
+}) => {
   const [settings, setSettings] = useState({
     systemName: 'DelayPilot',
     timezone: 'UTC',
@@ -194,7 +197,13 @@ const Settings = ({ userRole, userName, onLogout, activeTab, onTabChange }) => {
         onLogout={onLogout}
         activeTab={activeTab}
         onTabChange={onTabChange}
-      />
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
+        />
       <MainContent>
         <ContentArea>
           <HeaderRow>

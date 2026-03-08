@@ -1,70 +1,63 @@
 /**
  * KPICards.js
  * ─────────────────────────────────────────────────────────────────
- * All styled-components imported from components.styles.js.
- * Accepts optional `liveKPIs` prop from Dashboard (pipeline data).
- * Falls back to static Munich airport averages when pipeline is offline.
+ * Displays 4 KPI cards + Refresh + KPI Report buttons.
+ * Notification bell/dropdown moved to NavigationBar (global, App.js owned).
+ * Refresh button shows a spinner while loading=true (matches FlightsPage UX).
  * ─────────────────────────────────────────────────────────────────
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import KPIReportModal from './KPIReportModal';
 import {
-  KPIContainer, KPIRow, KPIRowHeader, KPIActions, KPIIconStack,
+  KPIContainer, KPIRow, KPIRowHeader,
   KPICard, KPITitle, KPIMetric, KPINumber, KPISubLabel,
   KPILiveTag, KPILiveDot,
-  ReportButton, IconCircleButton, NotifDot,
-  NotifDropdownWrapper, NotifDropdown, NotifDropdownHeader,
-  NotifDropdownBody, NotifCard, NotifActions, NotifButton,
+  IconCircleButton,
 } from '../styles/components.styles';
 
 // Fallback static data (Munich Airport daily averages)
 const FALLBACK_KPI = {
   totalFlights:      381,
   delayedFlights:    57,
+  majorDelays:       9,
   averageDelay:      22,
   onTimePerformance: 85.1,
 };
 
-const KPICards = ({ refreshKey, onRefresh, liveKPIs = null, liveAlerts = [] }) => {
-  const [reportOpen,         setReportOpen]         = useState(false);
-  const [showNotifications,  setShowNotifications]  = useState(false);
-  const [hasNew,             setHasNew]             = useState(liveAlerts.length > 0);
-  const dropdownRef = useRef(null);
+const KPICards = ({ loading = false, onRefresh, liveKPIs = null }) => {
+  const [reportOpen, setReportOpen] = useState(false);
 
-  // Compute display values
   const isLive = !!liveKPIs;
   const kpi = isLive ? {
     totalFlights:      liveKPIs.totalFlights,
     delayedFlights:    liveKPIs.delayed15Count,
+    majorDelays:       liveKPIs.delayed30Count,
     averageDelay:      parseFloat(liveKPIs.avgDelayMin),
     onTimePerformance: parseFloat(liveKPIs.onTimePct),
   } : FALLBACK_KPI;
 
-  // Alert badge count
-  useEffect(() => {
-    if (liveAlerts.length > 0) setHasNew(true);
-  }, [liveAlerts]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setShowNotifications(false);
-      }
-    };
-    if (showNotifications) document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showNotifications]);
-
-  const handleDismiss    = (id)      => console.log(`Dismissing alert ${id}`);
-  const handleAddToBoard = (flightNo) => console.log(`Adding ${flightNo} to mitigation board`);
-
   const kpiCards = [
-    { title: 'Total Flights Today', value: kpi.totalFlights.toLocaleString(), sub: 'scheduled at MUC' },
-    { title: 'Delayed Flights',     value: kpi.delayedFlights,               sub: '≥15 min predicted' },
-    { title: 'Avg. Delay Duration', value: `${Math.round(kpi.averageDelay)} min`, sub: 'among delayed flights' },
-    { title: 'On-Time Performance', value: `${kpi.onTimePerformance}%`,      sub: 'flights on schedule' },
+    {
+      title: 'Total Flights',
+      value: kpi.totalFlights.toLocaleString(),
+      sub:   'in current FIDS window',
+    },
+    {
+      title: 'Delayed Flights',
+      value: kpi.delayedFlights,
+      sub:   isLive ? `${kpi.majorDelays} major · rest minor` : 'Minor + Major delays',
+    },
+    {
+      title: 'Avg. Delay',
+      value: `${Math.round(kpi.averageDelay)} min`,
+      sub:   'among delayed flights',
+    },
+    {
+      title: 'On-Time Performance',
+      value: `${kpi.onTimePerformance}%`,
+      sub:   'IATA OTP (excl. cancelled)',
+    },
   ];
 
   return (
@@ -86,49 +79,62 @@ const KPICards = ({ refreshKey, onRefresh, liveKPIs = null, liveAlerts = [] }) =
           ))}
         </KPIRow>
 
-        <KPIActions>
-          <ReportButton onClick={() => setReportOpen(true)}>Generate KPI Report</ReportButton>
-          <KPIIconStack>
-            <IconCircleButton onClick={onRefresh} title="Refresh all metrics">↻</IconCircleButton>
+        {/* ── Action buttons stacked right of cards ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginLeft: 14, flexShrink: 0 }}>
 
-            <NotifDropdownWrapper ref={dropdownRef}>
-              <IconCircleButton
-                onClick={() => { setShowNotifications(!showNotifications); setHasNew(false); }}
-                title="Notifications"
-              >
-                🔔
-                {hasNew && <NotifDot />}
-              </IconCircleButton>
+          {/* Refresh — spins while loading */}
+          <IconCircleButton
+            onClick={onRefresh}
+            title="Refresh all data"
+            disabled={loading}
+            style={{
+              width: 40, height: 40, fontSize: 18,
+              opacity: loading ? 0.7 : 1,
+              cursor: loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <span style={{
+              display: 'inline-block',
+              animation: loading ? 'spin 0.8s linear infinite' : 'none',
+            }}>↻</span>
+          </IconCircleButton>
 
-              {showNotifications && (
-                <NotifDropdown>
-                  <NotifDropdownHeader>
-                    Active Alerts {liveAlerts.length > 0 ? `(${liveAlerts.length})` : ''}
-                  </NotifDropdownHeader>
-                  <NotifDropdownBody>
-                    {liveAlerts.length === 0 ? (
-                      <div style={{ color: '#666', padding: '8px 0' }}>No active alerts.</div>
-                    ) : (
-                      liveAlerts.map(alert => (
-                        <NotifCard key={alert.id}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <strong style={{ color: '#1A4B8F' }}>{alert.flightNo}</strong>
-                            <span style={{ color: '#666', fontSize: 11 }}>{alert.time}</span>
-                          </div>
-                          <div style={{ lineHeight: 1.4, fontSize: 12 }}>{alert.message}</div>
-                          <NotifActions>
-                            <NotifButton onClick={() => handleDismiss(alert.id)}>Dismiss</NotifButton>
-                            <NotifButton primary onClick={() => handleAddToBoard(alert.flightNo)}>Add to Board</NotifButton>
-                          </NotifActions>
-                        </NotifCard>
-                      ))
-                    )}
-                  </NotifDropdownBody>
-                </NotifDropdown>
-              )}
-            </NotifDropdownWrapper>
-          </KPIIconStack>
-        </KPIActions>
+          {/* KPI Report */}
+          <button
+            onClick={() => setReportOpen(true)}
+            title="Generate KPI Report"
+            style={{
+              background: 'linear-gradient(180deg,#1A4B8F,#0f3a73)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '7px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(26,75,143,0.3)',
+              lineHeight: 1.3,
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 3,
+              width: 40,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.2"
+              strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="12" width="4" height="9"/>
+              <rect x="10" y="7" width="4" height="14"/>
+              <rect x="17" y="3" width="4" height="18"/>
+            </svg>
+            KPI
+          </button>
+
+          {/* CSS keyframe for spinner */}
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
       </KPIRowHeader>
 
       <KPIReportModal

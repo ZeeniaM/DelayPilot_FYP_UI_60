@@ -295,7 +295,9 @@ const fmtMin = (v) => (v && v > 0) ? `+${Math.round(v)} min` : 'On Time';
 /* ══════════════════════════════════════════════════════════════════
    Component
 ══════════════════════════════════════════════════════════════════ */
-const SimulationPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange }) => {
+const SimulationPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
+  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
+}) => {
 
   /* ── Flight selection ─────────────────────────────────────── */
   const [allFlights,     setAllFlights]     = useState([]);
@@ -405,6 +407,12 @@ const SimulationPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTa
         <NavigationBar
           userRole={userRole} userName={userName}
           onLogout={onLogout} activeTab={activeTab} onTabChange={onTabChange}
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
         />
 
         <MainContent>

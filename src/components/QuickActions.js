@@ -11,10 +11,10 @@ import { QuickActionsContainer, ActionButton } from '../styles/components.styles
 const QuickActions = ({ onTabChange }) => (
   <QuickActionsContainer>
     <ActionButton variant="primary"  onClick={() => onTabChange && onTabChange('Simulation')}>
-      🧪 Run Simulation
+      Run Simulation
     </ActionButton>
     <ActionButton variant="secondary" onClick={() => onTabChange && onTabChange('Mitigation Board')}>
-      📋 Mitigation Board
+      Mitigation Board
     </ActionButton>
     <ActionButton variant="outlined"  onClick={() => onTabChange && onTabChange('Flights')}>
       ✈ View All Flights

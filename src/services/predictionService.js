@@ -83,7 +83,7 @@ export const formatTime = (utcStr) => {
 //    15 – 29 min    → 'Minor Delay'
 //    ≥ 30 min       → 'Major Delay'
 
-const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed = false, delaySource = 'fids') => {
+const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed = false) => {
 
   if (opStatus) {
     switch (opStatus) {
@@ -111,16 +111,7 @@ const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed =
     return 'On Time';
   }
 
-  // Source: model tier — uses continuous predicted minutes (same 5-min threshold as confirmed)
-  // because ml_minutes_ui is a precise regressor output, not a binary bin label
-  if (delaySource === 'model') {
-    if (delayMin >= 30) return 'Major Delay';
-    if (delayMin >= 5)  return 'Minor Delay';
-    if (delayMin < 0)   return 'Early';
-    return 'On Time';
-  }
-
-  // Source: FIDS label fallback (≥15 min trained threshold — binary bins, not continuous)
+  // Source B — FIDS label fallback (≥15 min trained threshold)
   if (isBin30 || (delayMin != null && delayMin >= 30)) return 'Major Delay';
   if (isBin15 || (delayMin != null && delayMin >= 15)) return 'Minor Delay';
   return 'On Time';
@@ -182,33 +173,16 @@ const mapFlight = (f, idx) => {
   const schedUtc = f.sched_utc  || null;
   const movement = f.movement   || 'departure';
 
-  // ── 3-tier delay source priority ─────────────────────────────────────────
-  //
-  //  Tier 1 — confirmed_delay_min (Flight Status API: ATD/ATA/ETD/ETA vs sched)
-  //           Most authoritative. Real operational data from airline systems.
-  //           actualTime: real ATD/ATA/ETD/ETA timestamp, or computed sched+delay.
-  //
-  //  Tier 2 — ml_minutes_ui (ML model: CatBoost bin15+bin30+reg2 prediction)
-  //           Runs over all feature-engineered rows after each FIDS refresh.
-  //           More meaningful than the raw FIDS label — the model has learned
-  //           reactionary chains, congestion patterns, weather interactions.
-  //           actualTime: computed as sched + ml_minutes_ui (consistent).
-  //
-  //  Tier 3 — delay_min / y_delay_min (FIDS label: dep/arr_best_utc vs sched)
-  //           Raw difference. Only used when neither Status nor ML data available.
-  //           actualTime: actual_utc from flights_raw (always consistent).
-  //
-  //  SOURCE CONSISTENCY RULE: actualTime and delayMin always come from the
-  //  same tier. Never mix them across tiers.
+  const hasStatusData = f.confirmed_delay_min != null;
 
-  let delayMin, actualUtc, isConfirmed, delaySource;
+  let delayMin, actualUtc, isConfirmed;
 
-  if (f.confirmed_delay_min != null) {
-    // ── Tier 1: Flight Status API ──────────────────────────────────────────
+  if (hasStatusData) {
+    // ── Source A: Flight Status API ──────────────────────────────────────
     delayMin    = f.confirmed_delay_min;
     isConfirmed = true;
-    delaySource = 'confirmed';
 
+    // Use real ATD/ATA timestamps when available (most precise)
     const realActual = (movement === 'departure')
       ? (f.atd_utc || f.etd_utc)
       : (f.ata_utc || f.eta_utc);
@@ -216,39 +190,26 @@ const mapFlight = (f, idx) => {
     if (realActual) {
       actualUtc = realActual;
     } else if (schedUtc && delayMin != null) {
-      const schedMs = new Date(schedUtc).getTime();
+      // Derive: sched + confirmed_delay_min → always matches the delay shown
+      const schedMs  = new Date(schedUtc).getTime();
       actualUtc = new Date(schedMs + delayMin * 60 * 1000).toISOString();
     } else {
       actualUtc = null;
     }
 
-  } else if (f.ml_minutes_ui != null) {
-    // ── Tier 2: ML model prediction ───────────────────────────────────────
-    delayMin    = f.ml_minutes_ui;
-    isConfirmed = false;
-    delaySource = 'model';
-
-    // Compute actualTime from sched + ml_minutes_ui for consistency
-    if (schedUtc && delayMin != null && delayMin > 0) {
-      const schedMs = new Date(schedUtc).getTime();
-      actualUtc = new Date(schedMs + delayMin * 60 * 1000).toISOString();
-    } else {
-      actualUtc = f.actual_utc || null;
-    }
-
   } else {
-    // ── Tier 3: FIDS label fallback ───────────────────────────────────────
+    // ── Source B: FIDS only ──────────────────────────────────────────────
+    // delay_min and actual_utc both come from dep/arr_best_utc → always consistent
     delayMin    = f.delay_min != null ? f.delay_min : null;
     actualUtc   = f.actual_utc || null;
     isConfirmed = false;
-    delaySource = 'fids';
   }
 
-  // Binary flags from the chosen delayMin — single source, no mixing
+  // Binary flags derived from the single chosen delayMin — never from mixed sources
   const isDelayed15 = delayMin != null ? delayMin >= 15 : false;
   const isDelayed30 = delayMin != null ? delayMin >= 30 : false;
 
-  const status = deriveStatus(delayMin, isDelayed15, isDelayed30, f.op_status, isConfirmed, delaySource);
+  const status = deriveStatus(delayMin, isDelayed15, isDelayed30, f.op_status, isConfirmed);
 
   const airline = AIRLINE_NAMES[f.airline_iata] || f.airline_iata || 'Unknown';
   const dest    = AIRPORT_LABELS[f.destination]  || f.destination  || 'Unknown';
@@ -256,26 +217,43 @@ const mapFlight = (f, idx) => {
     ? `MUC → ${dest}`
     : `${dest} → MUC`;
 
-  // ── Cause derivation ─────────────────────────────────────────────────────
-  // Priority: ML model cause (server-side, has all features) → UI heuristic fallback
+  // Derive cause only for flights that are actually delayed
+  // Uses weather signal from pipeline if available, else magnitude heuristic
   const isActuallyDelayed = status === 'Minor Delay' || status === 'Major Delay';
   let likelyCause = null;
   if (isActuallyDelayed) {
-    if (f.ml_cause) {
-      // Tier 1: Use cause derived server-side from model outputs + pipeline features
-      likelyCause = f.ml_cause;
-    } else {
-      // Tier 2: Heuristic fallback (when flight_predictions table not yet populated)
-      const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
-      if (hasWeather)       likelyCause = 'Weather';
-      else if (isDelayed30) likelyCause = 'Reactionary';
-      else                  likelyCause = 'Congestion';
-    }
+    const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
+    if (hasWeather)           likelyCause = 'Weather';
+    else if (isDelayed30)     likelyCause = 'Reactionary';
+    else                      likelyCause = 'Congestion';
   }
 
   // predictedDelay: only show when there is a meaningful delay (>= 1 min)
   // Negative = early arrival, show as 0
   const predictedDelay = delayMin != null ? Math.max(0, Math.round(delayMin)) : 0;
+
+  // ── ML batch prediction fields (from flight_predictions JOIN in /flights) ──
+  // NULL when this flight hasn't been through a prediction pipeline cycle yet.
+  const ml_minutes_ui    = f.ml_minutes_ui    != null ? f.ml_minutes_ui    : null;
+  const ml_p_delay_15    = f.ml_p_delay_15    != null ? f.ml_p_delay_15    : null;
+  const ml_p_delay_30    = f.ml_p_delay_30    != null ? f.ml_p_delay_30    : null;
+  const ml_pred_delay_15 = f.ml_pred_delay_15 != null ? f.ml_pred_delay_15 : null;
+  const ml_pred_delay_30 = f.ml_pred_delay_30 != null ? f.ml_pred_delay_30 : null;
+  const ml_cause         = f.ml_cause         || null;
+
+  // Parse cause_scores JSON — stored as TEXT in the DB
+  let cause_scores = null;
+  if (f.cause_scores) {
+    try { cause_scores = JSON.parse(f.cause_scores); } catch (_) {}
+  }
+
+  // Delay source label for the drawer
+  const delaySource = isConfirmed      ? 'confirmed'
+    : ml_minutes_ui != null ? 'model'
+    : 'fids';
+
+  // Cause: prefer ML cause from batch predictions; fall back to heuristic
+  const displayCause = ml_cause || (isActuallyDelayed ? likelyCause : null);
 
   return {
     id:             idx + 1,
@@ -287,35 +265,30 @@ const mapFlight = (f, idx) => {
     scheduledTime:  formatTime(schedUtc),
     actualTime:     formatTime(actualUtc),
     sched_utc:      schedUtc,
-    // Expose raw fields so KPICards/computeKPIs work correctly
+    // Tier-priority delay fields (used by KPIs, table, status)
     delay_min:      delayMin,
     is_delayed_15:  isDelayed15,
     is_delayed_30:  isDelayed30,
     predictedDelay,
-    likelyCause,
+    likelyCause:    displayCause,
+    cause_scores,
+    delaySource,
     status,
     op_status:      f.op_status || 'Scheduled',
-    isConfirmed,                           // true = delay from flight_status_live
-    delaySource,                           // 'confirmed' | 'model' | 'fids'
-    isLanded:         f.op_status === 'Landed',
-    isCancelled:      f.op_status === 'Cancelled',
-    isDiverted:       f.op_status === 'Diverted',
-    confirmedDelay:   isConfirmed,
-    etd_utc:          f.etd_utc || null,
-    eta_utc:          f.eta_utc || null,
-    // Raw ML model fields (for detail view / tooltip)
-    ml_minutes_ui:    f.ml_minutes_ui    != null ? f.ml_minutes_ui    : null,
-    ml_p_delay_15:    f.ml_p_delay_15    != null ? f.ml_p_delay_15    : null,
-    ml_p_delay_30:    f.ml_p_delay_30    != null ? f.ml_p_delay_30    : null,
-    ml_pred_delay_15: f.ml_pred_delay_15 != null ? f.ml_pred_delay_15 : null,
-    ml_pred_delay_30: f.ml_pred_delay_30 != null ? f.ml_pred_delay_30 : null,
-    ml_cause:         f.ml_cause         || null,
-    // cause_scores: JSON string from flight_predictions → parse to {cause: pct} object
-    // e.g. {"Weather (MUC)": 45, "Reactionary": 30, "ATC / Congestion": 15, ...}
-    cause_scores: (() => {
-      try { return f.cause_scores ? JSON.parse(f.cause_scores) : null; }
-      catch { return null; }
-    })(),
+    isConfirmed,
+    isLanded:       f.op_status === 'Landed',
+    isCancelled:    f.op_status === 'Cancelled',
+    isDiverted:     f.op_status === 'Diverted',
+    confirmedDelay: isConfirmed,
+    etd_utc:        f.etd_utc || null,
+    eta_utc:        f.eta_utc || null,
+    // ML prediction fields — read directly by FlightsPage drawer
+    ml_minutes_ui,
+    ml_p_delay_15,
+    ml_p_delay_30,
+    ml_pred_delay_15,
+    ml_pred_delay_30,
+    ml_cause,
   };
 };
 
@@ -369,23 +342,45 @@ export const predictFlight = async (number_raw, sched_utc) => {
 
 // ── KPI computation from flights array ──────────────────────────
 export const computeKPIs = (flights) => {
+  // Values use the same `status` (deriveStatus output) and `delay_min`
+  // (tier-priority: confirmed API → ML model → FIDS) as the flights table.
   if (!flights || flights.length === 0) return null;
-  const total      = flights.length;
-  const delayed15  = flights.filter(f => f.is_delayed_15).length;
-  const delayed30  = flights.filter(f => f.is_delayed_30).length;
-  const onTime     = total - delayed15;
-  const delayedArr = flights.filter(f => f.delay_min > 0);
-  const avgDelay   = delayedArr.length
-    ? delayedArr.reduce((s, f) => s + f.delay_min, 0) / delayedArr.length
+
+  const total = flights.length;
+
+  // Status classification — identical to table row logic
+  const minorDelayed = flights.filter(f => f.status === 'Minor Delay');
+  const majorDelayed = flights.filter(f => f.status === 'Major Delay');
+  const allDelayed   = [...minorDelayed, ...majorDelayed];
+
+  // Avg delay: mean delay_min over ALL delayed flights with a positive value.
+  // delay_min is the tier-priority value (confirmed_delay_min when available,
+  // else ML minutes_ui, else FIDS y_delay_min) — so confirmed API delays are included.
+  const withDelay = allDelayed.filter(f => f.delay_min != null && f.delay_min > 0);
+  const avgDelay  = withDelay.length
+    ? withDelay.reduce((s, f) => s + f.delay_min, 0) / withDelay.length
     : 0;
+
+  // On-Time Performance — IATA/CODA aviation standard:
+  // OTP = flights departing/arriving within 15 min of schedule ÷ operable flights.
+  // Cancelled and Diverted are excluded from both numerator and denominator
+  // (they are not "operable" for OTP purposes).
+  const cancelled    = flights.filter(f => f.isCancelled).length;
+  const diverted     = flights.filter(f => f.isDiverted).length;
+  const otpBase      = total - cancelled - diverted;
+  const otpDelayed   = allDelayed.filter(f => !f.isCancelled && !f.isDiverted).length;
+  const otpOnTime    = otpBase - otpDelayed;
+  const otp          = otpBase > 0 ? (otpOnTime / otpBase) * 100 : 100;
 
   return {
     totalFlights:   total,
-    onTimeCount:    onTime,
-    onTimePct:      ((onTime / total) * 100).toFixed(1),
-    delayed15Count: delayed15,
-    delayed30Count: delayed30,
+    onTimeCount:    otpOnTime,
+    onTimePct:      otp.toFixed(1),       // IATA OTP: excludes cancelled/diverted
+    delayed15Count: allDelayed.length,
+    delayed30Count: majorDelayed.length,
     avgDelayMin:    avgDelay.toFixed(1),
+    cancelledCount: cancelled,
+    divertedCount:  diverted,
   };
 };
 

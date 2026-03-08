@@ -8,12 +8,13 @@
  */
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { createGlobalStyle } from 'styled-components';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
 import {
   PageContainer, MainContent, ContentArea,
-  PageHeaderRow, PageTitle, IconCircleButton,
-  FilterBar, SearchBox, FilterSelect, TimeToggleContainer, TimeToggleButton,
+  PageTitle, IconCircleButton,
+  FilterBar, SearchBox, FilterSelect,
   FullTableContainer, Table, TableHead, FullTableHeaderCell, TableBody, TableRow, TableCell,
   FlightNumber, AirlineInfo, RouteInfo, TimeCell, ScheduledTime, ActualTime,
   DelayValue, CauseTag, StatusPill, ChevronIcon,
@@ -27,6 +28,17 @@ import {
   DrawerBackdrop, LoadingText, ErrorText, Spinner,
 } from '../styles/components.styles';
 import { fetchFlights } from '../services/predictionService';
+
+// ── Global style: lock background to solid blue across all interactions ────
+// The background split (blue nav / white body) shifts on drawer open/close
+// because body padding-right is added for scrollbar compensation. 
+// Setting a consistent background on html+body prevents any white flash.
+const GlobalBlueBackground = createGlobalStyle`
+  html, body, #root {
+    background-color: #1A4B8F !important;
+    min-height: 100vh;
+  }
+`;
 
 // ── Helpers ──────────────────────────────────────────────────────
 // Label for delay data source shown in drawer
@@ -54,7 +66,9 @@ const buildAlerts = (flights) =>
   }));
 
 // ── Component ────────────────────────────────────────────────────
-const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange }) => {
+const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
+  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
+}) => {
   const [flights,           setFlights]           = useState([]);
   const [loading,           setLoading]           = useState(false);
   const [error,             setError]             = useState(null);
@@ -67,6 +81,10 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
 
   const [selectedFlight,    setSelectedFlight]    = useState(null);
   const [drawerOpen,        setDrawerOpen]        = useState(false);
+  const [dismissedAlerts,   setDismissedAlerts]   = useState(new Set());
+  const [boardFlights,      setBoardFlights]      = useState([]);
+  const [prediction,        setPrediction]        = useState(null);
+  const [predLoading,       setPredLoading]       = useState(false);
 
   // Fetch flights
   const loadFlights = useCallback(async () => {
@@ -84,13 +102,36 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
   useEffect(() => { loadFlights(); }, [loadFlights, refreshKey]);
 
   // Filtered view
+  // Status sort order: delayed first (severity desc), then on time, en route, early/landed last
+  const STATUS_SORT_ORDER = {
+    'Major Delay': 0,
+    'Minor Delay': 1,
+    'On Time':     2,
+    'Scheduled':   3,
+    'En Route':    4,
+    'Early':       5,
+    'Landed':      6,
+    'Cancelled':   7,
+    'Diverted':    8,
+  };
+
   const filteredFlights = useMemo(() => {
-    return flights.filter(f => {
+    const filtered = flights.filter(f => {
       const q = searchTerm.toLowerCase();
       const matchSearch    = f.flightNo.toLowerCase().includes(q) || f.airline.toLowerCase().includes(q);
       const matchStatus    = statusFilter    === 'All' || f.status    === statusFilter;
       const matchMovement  = movementFilter  === 'All' || f.movement  === movementFilter;
       return matchSearch && matchStatus && matchMovement;
+    });
+
+    // Sort: delayed (major → minor) first, then on time, en route, early/landed last.
+    // Within the same status, preserve chronological order (sched_utc ascending).
+    return [...filtered].sort((a, b) => {
+      const orderA = STATUS_SORT_ORDER[a.status] ?? 9;
+      const orderB = STATUS_SORT_ORDER[b.status] ?? 9;
+      if (orderA !== orderB) return orderA - orderB;
+      // Same status → sort by scheduled time ascending
+      return (a.sched_utc || '').localeCompare(b.sched_utc || '');
     });
   }, [flights, searchTerm, statusFilter, movementFilter]);
 
@@ -113,7 +154,9 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
   };
 
   return (
-    <PageLayout>
+    <>
+      <GlobalBlueBackground />
+      <PageLayout>
       <PageContainer>
         <NavigationBar
           userRole={userRole}
@@ -121,14 +164,20 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
           onLogout={onLogout}
           activeTab={activeTab}
           onTabChange={onTabChange}
+          notifCount={notifCount}
+          hasNewNotif={hasNewNotif}
+          notifOpen={notifOpen}
+          liveAlerts={liveAlerts || []}
+          onNotifClick={onNotifClick}
+          onNotifClose={onNotifClose}
         />
 
         <MainContent>
           <ContentArea>
-            <PageHeaderRow>
-              <PageTitle>Flights Overview</PageTitle>
-              <IconCircleButton onClick={() => setRefreshKey(k => k + 1)} title="Refresh">↻</IconCircleButton>
-            </PageHeaderRow>
+            {/* Title centered; refresh button sits in the filter bar replacing toggles */}
+            <div style={{ textAlign: 'center', padding: '18px 0 10px' }}>
+              <PageTitle style={{ display: 'inline-block', margin: 0 }}>Flights Overview</PageTitle>
+            </div>
 
             {error && <ErrorText>{error}</ErrorText>}
 
@@ -156,11 +205,12 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                 <option value="arrival">Arrivals</option>
               </FilterSelect>
 
-              <TimeToggleContainer>
-                {['Today', 'Week', 'All'].map(t => (
-                  <TimeToggleButton key={t} active={timeFilter === t} onClick={() => setTimeFilter(t)}>{t}</TimeToggleButton>
-                ))}
-              </TimeToggleContainer>
+              {/* Refresh button — replaces time-range toggles */}
+              <IconCircleButton
+                onClick={() => setRefreshKey(k => k + 1)}
+                title="Refresh flights"
+                style={{ marginLeft: 'auto', fontSize: 18, width: 36, height: 36 }}
+              >↻</IconCircleButton>
             </FilterBar>
 
             <FullTableContainer>
@@ -233,20 +283,42 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
               </SideAlertsTitle>
             </SideAlertsHeader>
             <SideAlertsContent>
-              {alerts.length === 0 ? (
-                <div style={{ padding: 12, color: '#666', fontSize: 13 }}>No active alerts.</div>
-              ) : alerts.map(a => (
-                <SideAlertCard key={a.id} severity={a.severity}>
-                  <SideAlertFlight>{a.flightNo}</SideAlertFlight>
-                  <SideAlertMessage>{a.message}</SideAlertMessage>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                    <button style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#f1f3f4', color: '#333', cursor: 'pointer', fontSize: 11 }}
-                      onClick={e => { e.stopPropagation(); }}>Dismiss</button>
-                    <button style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#1A4B8F', color: '#fff', cursor: 'pointer', fontSize: 11 }}
-                      onClick={e => { e.stopPropagation(); }}>Add to Board</button>
-                  </div>
-                </SideAlertCard>
-              ))}
+              {(() => {
+                const visibleAlerts = alerts.filter(a => !dismissedAlerts.has(a.id));
+                if (visibleAlerts.length === 0) {
+                  return <div style={{ padding: 12, color: '#666', fontSize: 13 }}>No active alerts.</div>;
+                }
+                return visibleAlerts.map(a => {
+                  const onBoard = boardFlights.includes(a.flightNo);
+                  return (
+                    <SideAlertCard key={a.id} severity={a.severity}>
+                      <SideAlertFlight>{a.flightNo}</SideAlertFlight>
+                      <SideAlertMessage>{a.message}</SideAlertMessage>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                        <button
+                          style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#f1f3f4', color: '#333', cursor: 'pointer', fontSize: 11 }}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setDismissedAlerts(prev => new Set([...prev, a.id]));
+                          }}
+                        >Dismiss</button>
+                        <button
+                          style={{
+                            padding: '5px 10px', borderRadius: 6, border: 'none',
+                            background: onBoard ? '#166534' : '#1A4B8F',
+                            color: '#fff', cursor: 'pointer', fontSize: 11,
+                            transition: 'background 0.2s',
+                          }}
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (!onBoard) setBoardFlights(prev => [...prev, a.flightNo]);
+                          }}
+                        >{onBoard ? '✓ On Board' : 'Add to Board'}</button>
+                      </div>
+                    </SideAlertCard>
+                  );
+                });
+              })()}
             </SideAlertsContent>
           </SideAlertsPanel>
         </MainContent>
@@ -435,6 +507,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
         {drawerOpen && <DrawerBackdrop onClick={handleCloseDrawer} />}
       </PageContainer>
     </PageLayout>
+    </>
   );
 };
 
