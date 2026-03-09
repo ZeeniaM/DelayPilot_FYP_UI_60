@@ -186,7 +186,7 @@ const InputWithError = styled(Input)`
   }
 `;
 
-const LoginPage = ({ onLogin }) => {
+const LoginPage = ({ onLogin, onGoBack }) => {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -330,6 +330,22 @@ const LoginPage = ({ onLogin }) => {
   return (
     <>
       <LoginContainer>
+        {onGoBack && (
+          <button
+            onClick={onGoBack}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: '#1A4B8F', fontSize: 13, fontWeight: 500,
+              marginBottom: 16, padding: '4px 0',
+              opacity: 0.8, transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.opacity = 1}
+            onMouseLeave={e => e.currentTarget.style.opacity = 0.8}
+          >
+            ← Back to Home
+          </button>
+        )}
         <Header>DelayPilot – Login</Header>
         <Subtitle>Access your aviation dashboard</Subtitle>
         

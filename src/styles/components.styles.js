@@ -21,7 +21,18 @@
  * ─────────────────────────────────────────────────────────────────
  */
 
-import styled, { css, keyframes } from 'styled-components';
+import styled, { css, keyframes, createGlobalStyle } from 'styled-components';
+
+/* ── Google Fonts: Cinzel (display) + Outfit (body) ──────────────
+   Matches the LandingPage font system. Injected once here so all
+   dashboard pages inherit without any component changes.
+──────────────────────────────────────────────────────────────── */
+export const GlobalFonts = createGlobalStyle`
+  /* Outfit + Cinzel loaded via @import in index.css (must be first in stylesheet) */
+  body, button, input, select, textarea {
+    font-family: 'Outfit', 'Segoe UI', sans-serif;
+  }
+`;
 
 /* ══════════════════════════════════════════════════════════════════
    1. DESIGN TOKENS
@@ -176,24 +187,27 @@ export const NavLogo = styled.div`
   display: flex;
   align-items: center;
   gap: 8px;
+  font-family: 'Cinzel', Georgia, serif;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
   color: ${tokens.primary};
   cursor: pointer;
+  letter-spacing: 0.5px;
 
-  @media (max-width: ${tokens.bp768}) { font-size: 18px; }
+  @media (max-width: ${tokens.bp768}) { font-size: 17px; }
 `;
 
 export const NavLogoIcon = styled.div`
   width: 28px;
   height: 28px;
-  background: ${tokens.primary};
-  border-radius: 50%;
+  background: transparent;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-size: 14px;
+  color: ${tokens.primary};
+  font-size: 22px;
+  line-height: 1;
 `;
 
 export const NavTabs = styled.div`

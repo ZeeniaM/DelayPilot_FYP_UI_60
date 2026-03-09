@@ -1,47 +1,55 @@
 /**
  * App.js
  * ─────────────────────────────────────────────────────────────────
- * Notification state is lifted here so the bell persists across all
+ * Three-state routing:
+ *   1. Landing page  (public, default)
+ *   2. Login page    (operator, from landing or direct)
+ *   3. App pages     (authenticated)
+ *
+ * Notification state lifted here so the bell persists across all
  * page navigations. liveAlerts and notif toggle are passed down to
  * every page via props, and NavigationBar receives them globally.
  * ─────────────────────────────────────────────────────────────────
  */
-import React, { useState, useRef, useCallback } from 'react';
-import LoginPage from './components/LoginPage';
-import Dashboard from './components/Dashboard';
-import FlightsPage from './components/FlightsPage';
+import React, { useState, useCallback } from 'react';
+import LandingPage    from './components/LandingPage';
+import LoginPage      from './components/LoginPage';
+import Dashboard      from './components/Dashboard';
+import FlightsPage    from './components/FlightsPage';
 import SimulationPage from './components/SimulationPage';
 import MitigationBoard from './components/MitigationBoard';
 import UserManagement from './components/UserManagement';
-import Settings from './components/Settings';
-import Profile from './components/Profile';
+import Settings       from './components/Settings';
+import Profile        from './components/Profile';
 import './App.css';
+import { GlobalFonts } from './styles/components.styles';
+
+// ── view states ───────────────────────────────────────────────────
+const VIEW = { LANDING: 'landing', LOGIN: 'login', APP: 'app' };
 
 function App() {
-  const [isLoggedIn,  setIsLoggedIn]  = useState(false);
-  const [userRole,    setUserRole]    = useState('APOC');
-  const [userName,    setUserName]    = useState('');
-  const [activeTab,   setActiveTab]   = useState('Dashboard');
+  const [view,       setView]       = useState(VIEW.LANDING);
+  const [userRole,   setUserRole]   = useState('APOC');
+  const [userName,   setUserName]   = useState('');
+  const [activeTab,  setActiveTab]  = useState('Dashboard');
 
-  // ── Global notification state (persists across page changes) ──
+  // ── Global notification state ────────────────────────────────
   const [liveAlerts,  setLiveAlerts]  = useState([]);
   const [notifOpen,   setNotifOpen]   = useState(false);
   const [hasNew,      setHasNew]      = useState(false);
-
-  // Dashboard refresh counter — incrementing this causes Dashboard to re-fetch
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
 
   const handleLogin = (userData) => {
     setUserRole(userData.role);
     setUserName(userData.name || userData.username || '');
-    setIsLoggedIn(true);
+    setView(VIEW.APP);
     setActiveTab(userData.role === 'Admin' ? 'User Management' : 'Dashboard');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    setIsLoggedIn(false);
+    setView(VIEW.LANDING);
     setUserName('');
     setActiveTab('Dashboard');
     setLiveAlerts([]);
@@ -51,10 +59,9 @@ function App() {
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
-    setNotifOpen(false); // close dropdown on navigation
+    setNotifOpen(false);
   };
 
-  // Called by Dashboard when it recomputes alerts after a fetch
   const handleAlertsUpdate = useCallback((alerts) => {
     setLiveAlerts(alerts);
     if (alerts.length > 0) setHasNew(true);
@@ -65,14 +72,12 @@ function App() {
     setHasNew(false);
   };
 
-  // Shared nav props injected into every page
   const navProps = {
     userRole,
     userName,
     onLogout:     handleLogout,
     activeTab,
     onTabChange:  handleTabChange,
-    // Bell props — always present regardless of active page
     notifCount:   liveAlerts.length,
     hasNewNotif:  hasNew,
     notifOpen,
@@ -92,18 +97,12 @@ function App() {
             onAlertsUpdate={handleAlertsUpdate}
           />
         );
-      case 'Flights':
-        return <FlightsPage {...navProps} />;
-      case 'Simulation':
-        return <SimulationPage {...navProps} />;
-      case 'Mitigation Board':
-        return <MitigationBoard {...navProps} />;
-      case 'User Management':
-        return <UserManagement {...navProps} />;
-      case 'Settings':
-        return <Settings {...navProps} />;
-      case 'Profile':
-        return <Profile {...navProps} />;
+      case 'Flights':        return <FlightsPage    {...navProps} />;
+      case 'Simulation':     return <SimulationPage {...navProps} />;
+      case 'Mitigation Board': return <MitigationBoard {...navProps} />;
+      case 'User Management':  return <UserManagement {...navProps} />;
+      case 'Settings':       return <Settings  {...navProps} />;
+      case 'Profile':        return <Profile   {...navProps} />;
       default:
         return userRole === 'Admin'
           ? <UserManagement {...navProps} />
@@ -111,10 +110,31 @@ function App() {
     }
   };
 
+  // ── landing ───────────────────────────────────────────────────
+  if (view === VIEW.LANDING) {
+    return <LandingPage onGoToLogin={() => setView(VIEW.LOGIN)} />;
+  }
+
+  // ── login ─────────────────────────────────────────────────────
+  if (view === VIEW.LOGIN) {
+    return (
+      <>
+        <GlobalFonts />
+        <div className="App login-view">
+          <LoginPage onLogin={handleLogin} onGoBack={() => setView(VIEW.LANDING)} />
+        </div>
+      </>
+    );
+  }
+
+  // ── app ───────────────────────────────────────────────────────
   return (
-    <div className={`App${!isLoggedIn ? ' login-view' : ''}`}>
-      {isLoggedIn ? renderActivePage() : <LoginPage onLogin={handleLogin} />}
-    </div>
+    <>
+      <GlobalFonts />
+      <div className="App">
+        {renderActivePage()}
+      </div>
+    </>
   );
 }
 

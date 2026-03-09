@@ -198,6 +198,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                 <option value="Minor Delay">Minor Delay</option>
                 <option value="Major Delay">Major Delay</option>
                 <option value="En Route">En Route</option>
+                <option value="Early">Early</option>
                 <option value="Landed">Landed</option>
                 <option value="Cancelled">Cancelled</option>
               </FilterSelect>
