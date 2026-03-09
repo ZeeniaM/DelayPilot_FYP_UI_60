@@ -44,7 +44,7 @@ const GlobalBlueBackground = createGlobalStyle`
 // Label for delay data source shown in drawer
 const delaySourceLabel = (source) => {
   if (source === 'confirmed') return 'Confirmed (Flight Status API)';
-  if (source === 'model')     return 'ML Model Prediction';
+  if (source === 'model')     return 'Predictive Intelligence';
   if (source === 'fids')      return 'FIDS Estimate';
   return 'Unknown';
 };
@@ -58,12 +58,15 @@ const opStatusLabel = (s) => {
 
 // Build alerts from delayed flights
 const buildAlerts = (flights) =>
-  flights.filter(f => f.is_delayed_15).slice(0, 6).map((f, i) => ({
-    id: i + 1,
-    flightNo: f.flightNo,
-    severity: f.is_delayed_30 ? 'high' : 'moderate',
-    message: `${f.is_delayed_30 ? 'Major' : 'Minor'} delay predicted. Route: ${f.route}. Est: ${f.predictedDelay} min.`,
-  }));
+  flights
+    .filter(f => f.status === 'Major Delay' || (f.status === 'Minor Delay' && f.predictedDelay >= 15))
+    .slice(0, 6)
+    .map((f, i) => ({
+      id: i + 1,
+      flightNo: f.flightNo,
+      severity: f.status === 'Major Delay' ? 'high' : 'moderate',
+      message: `${f.status === 'Major Delay' ? 'Major' : 'Minor'} delay detected. Route: ${f.route}. Est. delay: +${f.predictedDelay} min.`,
+    }));
 
 // ── Component ────────────────────────────────────────────────────
 const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
@@ -286,7 +289,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
               {(() => {
                 const visibleAlerts = alerts.filter(a => !dismissedAlerts.has(a.id));
                 if (visibleAlerts.length === 0) {
-                  return <div style={{ padding: 12, color: '#666', fontSize: 13 }}>No active alerts.</div>;
+                  return <div style={{ padding: 12, color: '#666', fontSize: 13 }}>No major flight delays detected.</div>;
                 }
                 return visibleAlerts.map(a => {
                   const onBoard = boardFlights.includes(a.flightNo);
@@ -327,10 +330,63 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
         <DetailDrawer isOpen={drawerOpen}>
           {selectedFlight && (() => {
             const f = selectedFlight;
-            const hasML = f.ml_minutes_ui != null;
-            const isDelayed = f.status === 'Minor Delay' || f.status === 'Major Delay';
-            const p15pct = hasML ? Math.round((f.ml_p_delay_15 || 0) * 100) : null;
-            const p30pct = hasML ? Math.round((f.ml_p_delay_30 || 0) * 100) : null;
+
+            // ── Derived booleans ──────────────────────────────────────────────
+            // f.status and f.delay_min are ALWAYS from the same tier (API → ML → FIDS).
+            // predictionService.mapFlight() guarantees this after the tier-priority fix.
+            // ml_minutes_ui is the raw ML output — when delaySource==='model', this IS
+            // what drove f.delay_min and f.status, so they will be consistent.
+            const hasML      = f.ml_minutes_ui != null;
+            const isDelayed  = f.status === 'Minor Delay' || f.status === 'Major Delay';
+            // mlDelayed: the ML model itself predicts a delay (>= 5 min threshold)
+            const mlDelayed  = hasML && f.ml_minutes_ui >= 5;
+            const p15pct     = hasML ? Math.round((f.ml_p_delay_15 || 0) * 100) : null;
+            const p30pct     = hasML ? Math.round((f.ml_p_delay_30 || 0) * 100) : null;
+
+            // ── Section 1 data: what does the Flight Status API say? ──────────
+            // isConfirmed = confirmed_delay_min came from flight_status_live (API).
+            // delay_min is the tier-priority value (same source as the table row).
+            // If source is 'confirmed' → the delay in the table IS from the status API.
+            // If source is 'model'/'fids' → status API has no confirmed delay yet.
+            const apiDelayMin = f.isConfirmed ? f.delay_min : null;
+            const apiDelayDisplay = apiDelayMin != null
+              ? (apiDelayMin >= 0 ? `+${Math.round(apiDelayMin)} min` : `${Math.round(apiDelayMin)} min (early)`)
+              : '—';
+
+            // Actual/Est. time label — coloured only when there is a real delay
+            const actualColor = isDelayed ? '#dc2626' : f.status === 'Early' ? '#16a34a' : '#1e293b';
+
+            // ── Which source drove the status shown in the table? ─────────────
+            // 'confirmed' → Flight Status API  |  'model' → ML batch prediction
+            // 'fids'      → FIDS y_delay label
+            const sourceNote = f.delaySource === 'confirmed'
+              ? 'Confirmed — Flight Status API'
+              : f.delaySource === 'fids'
+                ? 'Observed — Flight Schedule data'
+                : 'Predicted — ML model';
+
+            // ── Cause data ────────────────────────────────────────────────────
+            // cause_scores come from run_batch_predictions._derive_cause_scores().
+            // They are grounded in real feature signal strengths — NOT fabricated.
+            // Show them for ANY flight where model ran, not just those showing delay
+            // in the table (model may predict delay risk even if FIDS says on time).
+            const causeScores = f.cause_scores;
+            const hasCauseScores = causeScores && Object.keys(causeScores).length > 0;
+            const sortedCauses = hasCauseScores
+              ? Object.entries(causeScores).filter(([, v]) => v > 0).sort(([, a], [, b]) => b - a)
+              : [];
+            // Primary cause: highest-scoring category, or heuristic if no batch scores
+            const primaryCause = f.ml_cause || (isDelayed ? f.likelyCause : null);
+            // Show cause section when: flight is delayed OR model predicts delay risk
+            const showCause = isDelayed || mlDelayed || (hasCauseScores && sortedCauses[0]?.[1] > 20);
+
+            // ── Propagation risk ─────────────────────────────────────────────
+            // Reactionary risk: model predicted a delay AND this is a departure
+            // (arrivals cause reactionary delays in subsequent same-aircraft departures).
+            // We derive a rough estimate from ml_minutes_ui: significant departure delays
+            // cascade to subsequent rotations.
+            const propMinutes = hasML && mlDelayed ? Math.round(f.ml_minutes_ui * 0.6) : 0;
+            const showPropagation = propMinutes >= 5 && f.movement === 'departure';
 
             return (
               <>
@@ -344,148 +400,216 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
 
                 <DrawerContent>
 
-                  {/* ── Section 1: Flight Details ── */}
+                  {/* ══ Section 1: Flight Details (Status API data) ══════════════ */}
                   <DrawerSection>
                     <DrawerSectionTitle>Flight Details</DrawerSectionTitle>
                     <PredictionBlock>
+
                       <PredictionRow>
                         <PredictionLabel>Scheduled</PredictionLabel>
                         <PredictionValue>{f.scheduledTime || '—'}</PredictionValue>
                       </PredictionRow>
+
                       <PredictionRow>
                         <PredictionLabel>Actual / Est.</PredictionLabel>
-                        <PredictionValue
-                          style={{ color: isDelayed ? '#dc2626' : f.status === 'Early' ? '#16a34a' : '#1e293b' }}
-                        >
+                        <PredictionValue style={{ color: actualColor, fontWeight: isDelayed ? 600 : 400 }}>
                           {f.actualTime || `~${f.scheduledTime}` || '—'}
                         </PredictionValue>
                       </PredictionRow>
+
+                      {/* Observed/confirmed delay row — label and value adapt to the active tier */}
                       <PredictionRow>
-                        <PredictionLabel>Status</PredictionLabel>
+                        <PredictionLabel>
+                          {f.delaySource === 'confirmed' ? 'Delay (confirmed)' : 'Delay (estimated)'}
+                        </PredictionLabel>
+                        <PredictionValue style={{
+                          color: (() => {
+                            const d = f.delaySource === 'confirmed' ? apiDelayMin : f.delay_min;
+                            return d > 0 ? '#dc2626' : d < 0 ? '#16a34a' : '#64748b';
+                          })(),
+                          fontWeight: 400,
+                        }}>
+                          {(() => {
+                            // Show the value from the tier that drove the status
+                            const d = f.delaySource === 'confirmed' ? apiDelayMin
+                                    : f.delaySource === 'fids'      ? f.delay_min
+                                    : null;   // 'model' tier — delay shown in ML section below
+                            if (d == null && f.delaySource === 'model') {
+                              return <span style={{ fontSize: 11, color: '#94a3b8' }}>see ML prediction below</span>;
+                            }
+                            if (d == null) {
+                              return <span style={{ fontSize: 11, color: '#94a3b8' }}>not yet available</span>;
+                            }
+                            return d >= 0 ? `+${Math.round(d)} min` : `${Math.round(d)} min (early)`;
+                          })()}
+                        </PredictionValue>
+                      </PredictionRow>
+
+                      <PredictionRow>
+                        <PredictionLabel>Delay Status</PredictionLabel>
                         <PredictionValue>
                           <StatusPill status={f.status}>{f.status}</StatusPill>
                         </PredictionValue>
                       </PredictionRow>
+
                       <PredictionRow>
                         <PredictionLabel>Op. Status</PredictionLabel>
                         <PredictionValue style={{ color: '#475569', fontSize: 12 }}>
                           {opStatusLabel(f.op_status)}
                         </PredictionValue>
                       </PredictionRow>
-                      {f.isConfirmed && f.delay_min != null && (
-                        <PredictionRow>
-                          <PredictionLabel>Confirmed Delay</PredictionLabel>
-                          <PredictionValue style={{ color: f.delay_min >= 5 ? '#dc2626' : '#16a34a' }}>
-                            {f.delay_min >= 0 ? `+${Math.round(f.delay_min)} min` : `${Math.round(f.delay_min)} min (early)`}
-                          </PredictionValue>
-                        </PredictionRow>
-                      )}
+
                       <PredictionRow>
                         <PredictionLabel>Delay Source</PredictionLabel>
                         <PredictionValue style={{ color: '#64748b', fontSize: 11 }}>
-                          {delaySourceLabel(f.delaySource)}
+                          {sourceNote}
                         </PredictionValue>
                       </PredictionRow>
+
                     </PredictionBlock>
                   </DrawerSection>
 
-                  {/* ── Section 2: ML Model Prediction ── */}
+                  {/* ══ Section 2: Delay Intelligence ════════════════════════════ */}
                   <DrawerSection>
-                    <DrawerSectionTitle>ML Model Prediction</DrawerSectionTitle>
+                    <DrawerSectionTitle>Delay Intelligence</DrawerSectionTitle>
                     {hasML ? (
                       <PredictionBlock>
+
+                        {/* Predicted delay — from the regression model (ml_minutes_ui) */}
                         <PredictionRow>
                           <PredictionLabel>Predicted Delay</PredictionLabel>
-                          <PredictionValue style={{ color: f.ml_minutes_ui > 0 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>
-                            {f.ml_minutes_ui > 0 ? `+${Math.round(f.ml_minutes_ui)} min` : 'On Time'}
+                          <PredictionValue style={{
+                            color: mlDelayed ? '#dc2626' : '#16a34a',
+                            fontWeight: 700, fontSize: 15,
+                          }}>
+                            {mlDelayed ? `+${Math.round(f.ml_minutes_ui)} min` : 'On Time'}
                           </PredictionValue>
                         </PredictionRow>
-                        <PredictionRow>
-                          <PredictionLabel>Delay ≥15 min predicted</PredictionLabel>
-                          <PredictionValue>{f.ml_pred_delay_15 ? 'Yes' : 'No'}</PredictionValue>
-                        </PredictionRow>
-                        <PredictionRow>
-                          <PredictionLabel>Delay ≥30 min predicted</PredictionLabel>
-                          <PredictionValue>{f.ml_pred_delay_30 ? 'Yes' : 'No'}</PredictionValue>
-                        </PredictionRow>
+
+                        {/* Context note: explains which priority tier drove the table row */}
+                        {f.delaySource === 'model' && isDelayed && (
+                          <div style={{ fontSize: 11, color: '#1A4B8F', background: '#eff6ff',
+                            borderRadius: 6, padding: '5px 8px', marginBottom: 8 }}>
+                            ↑ This ML prediction is the source of the delay shown in the flights table.
+                            No confirmed Status API data is available yet.
+                          </div>
+                        )}
+                        {f.delaySource === 'model' && !isDelayed && mlDelayed && (
+                          <div style={{ fontSize: 11, color: '#92400e', background: '#fffbeb',
+                            borderRadius: 6, padding: '5px 8px', marginBottom: 8 }}>
+                            ⚠ Model predicts a delay risk. Flight currently shows On Time in the table
+                            (below the 15-min classification threshold).
+                          </div>
+                        )}
+
+                        {/* Probability bars only — binary Yes/No rows removed */}
                         <div style={{ marginTop: 10 }}>
-                          <PredictionLabel>P(delay ≥15 min): {p15pct}%</PredictionLabel>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                            <PredictionLabel>P(delay ≥15 min)</PredictionLabel>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: p15pct >= 50 ? '#dc2626' : '#64748b' }}>
+                              {p15pct}%
+                            </span>
+                          </div>
                           <ProbBar><ProbFill pct={p15pct} /></ProbBar>
                         </div>
-                        <div style={{ marginTop: 8 }}>
-                          <PredictionLabel>P(delay ≥30 min): {p30pct}%</PredictionLabel>
+
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                            <PredictionLabel>P(delay ≥30 min)</PredictionLabel>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: p30pct >= 50 ? '#dc2626' : '#64748b' }}>
+                              {p30pct}%
+                            </span>
+                          </div>
                           <ProbBar><ProbFill pct={p30pct} /></ProbBar>
                         </div>
+
                       </PredictionBlock>
                     ) : (
-                      <div style={{ fontSize: 13, color: '#94a3b8' }}>
-                        ML predictions not yet available for this flight.
-                        They are computed after each FIDS refresh cycle.
+                      <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>
+                        ML predictions computed after each FIDS refresh cycle.
+                        {f.isConfirmed && f.delay_min != null && (
+                          <span style={{ display: 'block', marginTop: 6, color: '#1A4B8F', fontWeight: 600, fontSize: 12 }}>
+                            Confirmed delay: {apiDelayDisplay} (Flight Status API)
+                          </span>
+                        )}
                       </div>
                     )}
                   </DrawerSection>
 
-                  {/* ── Section 3: Delay Cause ── */}
+                  {/* ══ Section 3: Delay Cause ═══════════════════════════════════ */}
                   <DrawerSection>
                     <DrawerSectionTitle>Delay Cause</DrawerSectionTitle>
-                    {!isDelayed ? (
-                      <div style={{ fontSize: 13, color: '#94a3b8' }}>No delay identified for this flight.</div>
-                    ) : (() => {
-                      // cause_scores: {cause_label: pct} from run_batch_predictions.py
-                      // Each score is grounded in real pipeline feature values.
-                      // Computed by _derive_cause_scores() — NOT fabricated percentages.
-                      const causeScores = f.cause_scores;
-                      const hasCauseScores = causeScores && Object.keys(causeScores).length > 0;
 
-                      // Filter to causes with score > 0 and sort descending
-                      const sortedCauses = hasCauseScores
-                        ? Object.entries(causeScores)
-                            .filter(([, pct]) => pct > 0)
-                            .sort(([, a], [, b]) => b - a)
-                        : [];
+                    {!showCause ? (
+                      <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                        No significant delay risk identified for this flight.
+                      </div>
+                    ) : (
+                      <>
+                        {/* Primary cause badge + source note */}
+                        <div style={{ marginBottom: 12 }}>
+                          <PredictionRow>
+                            <PredictionLabel>Primary Cause</PredictionLabel>
+                            <PredictionValue>
+                              {primaryCause
+                                ? <CauseTag cause={primaryCause}>{primaryCause}</CauseTag>
+                                : <span style={{ color: '#94a3b8' }}>Undetermined</span>}
+                            </PredictionValue>
+                          </PredictionRow>
+                          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                            {f.ml_cause ? 'Based on model feature signals' : 'Based on available flight data'}
+                          </div>
+                        </div>
 
-                      return (
-                        <>
-                          {/* Primary cause badge */}
-                          <div style={{ marginBottom: 12 }}>
-                            <PredictionRow>
-                              <PredictionLabel>Primary Cause</PredictionLabel>
-                              <PredictionValue>
-                                {f.likelyCause
-                                  ? <CauseTag cause={f.likelyCause}>{f.likelyCause}</CauseTag>
-                                  : <span style={{ color: '#94a3b8' }}>Unknown</span>}
-                              </PredictionValue>
-                            </PredictionRow>
-                            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                              {f.ml_cause
-                                ? 'Determined by ML pipeline feature signals'
-                                : 'Heuristic fallback (weather code + delay magnitude)'}
+                        {/* Feature-signal contribution bars */}
+                        {hasCauseScores && sortedCauses.length > 0 ? (
+                          <CauseBreakdown>
+                            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                              Cause contribution by feature signal strength:
+                            </div>
+                            {sortedCauses.map(([label, pct]) => (
+                              <CauseItem key={label}>
+                                <CauseLabel style={{ fontSize: 12, minWidth: 140 }}>{label}</CauseLabel>
+                                <CauseBar><CauseFill cause={label} percentage={Math.round(pct)} /></CauseBar>
+                                <CausePercentage>{Math.round(pct)}%</CausePercentage>
+                              </CauseItem>
+                            ))}
+                          </CauseBreakdown>
+                        ) : null}
+                      </>
+                    )}
+                  </DrawerSection>
+
+                  {/* ══ Section 4: Propagation Impact (departures only) ══════════ */}
+                  {showPropagation && (
+                    <DrawerSection>
+                      <DrawerSectionTitle>Propagation Impact</DrawerSectionTitle>
+                      <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          background: propMinutes >= 25 ? '#fee2e2' : propMinutes >= 12 ? '#fef9c3' : '#f0fdf4',
+                          borderRadius: 8, padding: '8px 12px', marginBottom: 10,
+                        }}>
+                          <span style={{ fontSize: 18 }}>
+                            {propMinutes >= 25 ? '🔴' : propMinutes >= 12 ? '🟡' : '🟢'}
+                          </span>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 13,
+                              color: propMinutes >= 25 ? '#dc2626' : propMinutes >= 12 ? '#92400e' : '#166534' }}>
+                              {propMinutes >= 25 ? 'High' : propMinutes >= 12 ? 'Moderate' : 'Low'} reactionary risk
+                            </div>
+                            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                              Next rotation may absorb ~{propMinutes} min of this delay
                             </div>
                           </div>
-
-                          {/* Cause contribution breakdown — real feature-signal scores */}
-                          {hasCauseScores ? (
-                            <CauseBreakdown>
-                              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
-                                Cause contribution (feature signal strength):
-                              </div>
-                              {sortedCauses.map(([label, pct]) => (
-                                <CauseItem key={label}>
-                                  <CauseLabel style={{ fontSize: 12, minWidth: 140 }}>{label}</CauseLabel>
-                                  <CauseBar><CauseFill cause={label} percentage={pct} /></CauseBar>
-                                  <CausePercentage>{pct}%</CausePercentage>
-                                </CauseItem>
-                              ))}
-                            </CauseBreakdown>
-                          ) : (
-                            <div style={{ fontSize: 13, color: '#94a3b8' }}>
-                              Cause breakdown will be available after next pipeline refresh.
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </DrawerSection>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                          Estimated as 60% of predicted departure delay. Actual impact depends
+                          on turnaround buffer and aircraft rotation schedule.
+                        </div>
+                      </div>
+                    </DrawerSection>
+                  )}
 
                 </DrawerContent>
 

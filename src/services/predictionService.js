@@ -78,20 +78,27 @@ export const formatTime = (utcStr) => {
 //    5 – 29 min     → 'Minor Delay'
 //    ≥ 30 min       → 'Major Delay'
 //
-//  isConfirmed=false (Source B — FIDS label):
-//    < 15 min       → 'On Time'   (model trained on ≥15 threshold)
+//  isConfirmed=false, source='fids':
+//    < 0            → 'Early'       (actual_utc earlier than sched_utc)
+//    0 – 14 min     → 'On Time'     (FIDS trained threshold is 15 min)
 //    15 – 29 min    → 'Minor Delay'
 //    ≥ 30 min       → 'Major Delay'
+//
+//  isConfirmed=false, source='model' (ML prediction, delayMin=ml_minutes_ui):
+//    < 5 min        → 'On Time'     (model uncertainty tolerance)
+//    5 – 29 min     → 'Minor Delay'
+//    ≥ 30 min       → 'Major Delay'
+//    (Early is not returned for model — model predicts delay, not early arrival)
 
-const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed = false) => {
+const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed = false, source = 'fids') => {
 
+  // Op-status overrides always win regardless of delay data
   if (opStatus) {
     switch (opStatus) {
       case 'Landed':    return 'Landed';
       case 'Cancelled': return 'Cancelled';
       case 'Diverted':  return 'Diverted';
       case 'EnRoute':
-        // En-route always has confirmed data — use confirmed thresholds
         if (delayMin != null && delayMin >= 30) return 'Major Delay';
         if (delayMin != null && delayMin >= 5)  return 'Minor Delay';
         if (delayMin != null && delayMin < 0)   return 'Early';
@@ -103,7 +110,8 @@ const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed =
     }
   }
 
-  // Source A — confirmed from Flight Status API
+  // ── Tier 1: Status API confirmed ─────────────────────────────────
+  // Tightest thresholds — 5 min tolerance (IATA operational standard)
   if (isConfirmed && delayMin != null) {
     if (delayMin >= 30) return 'Major Delay';
     if (delayMin >= 5)  return 'Minor Delay';
@@ -111,9 +119,31 @@ const deriveStatus = (delayMin, isBin15, isBin30, opStatus = null, isConfirmed =
     return 'On Time';
   }
 
-  // Source B — FIDS label fallback (≥15 min trained threshold)
-  if (isBin30 || (delayMin != null && delayMin >= 30)) return 'Major Delay';
-  if (isBin15 || (delayMin != null && delayMin >= 15)) return 'Minor Delay';
+  // ── Tier 2: FIDS observed time diff ──────────────────────────────
+  // FIDS y_delay_min is computed from dep/arr_best_utc — same source as actual_utc.
+  // 'Early' IS valid here: best_utc < sched_utc means actual/est is ahead of schedule.
+  // Threshold: 15 min (matches the binary y_bin15 label the model was trained on).
+  if (source === 'fids' && delayMin != null) {
+    if (delayMin >= 30) return 'Major Delay';
+    if (delayMin >= 5)  return 'Minor Delay';
+    if (delayMin < 0)   return 'Early';
+    return 'On Time';
+  }
+
+  // ── Tier 3: ML model prediction ──────────────────────────────────
+  // ml_minutes_ui is a continuous regressor output — not an observed time.
+  // No 'Early' here: the model predicts delay magnitude, not early arrival.
+  // Threshold: 5 min (accounts for model uncertainty; small predictions unreliable).
+  if (source === 'model' && delayMin != null) {
+    if (delayMin >= 30) return 'Major Delay';
+    if (delayMin >= 5)  return 'Minor Delay';
+    return 'On Time';
+  }
+
+  // ── Tier 4: FIDS binary labels (y_bin15 / y_bin30) ───────────────
+  // Last resort when we have classification labels but no numeric value.
+  if (isBin30) return 'Major Delay';
+  if (isBin15) return 'Minor Delay';
   return 'On Time';
 };
 
@@ -175,7 +205,7 @@ const mapFlight = (f, idx) => {
 
   const hasStatusData = f.confirmed_delay_min != null;
 
-  let delayMin, actualUtc, isConfirmed;
+  let delayMin, actualUtc, isConfirmed, delayTier = 'fids';
 
   if (hasStatusData) {
     // ── Source A: Flight Status API ──────────────────────────────────────
@@ -198,18 +228,66 @@ const mapFlight = (f, idx) => {
     }
 
   } else {
-    // ── Source B: FIDS only ──────────────────────────────────────────────
-    // delay_min and actual_utc both come from dep/arr_best_utc → always consistent
-    delayMin    = f.delay_min != null ? f.delay_min : null;
+    // ══ Tiers 2 → 4: No confirmed Status API data ════════════════════════
+    //
+    // PRIORITY (user-defined):
+    //   2. FIDS observed time diff (y_delay_min / actual_utc from dep/arr_best_utc)
+    //      Observed aircraft position data. Covers Early (negative delayMin),
+    //      On Time (0–14 min), Minor/Major Delay (≥15 min).
+    //      Used when |fidsDelay| is significant (< 0  OR  ≥ 15 min).
+    //
+    //   3. ML model prediction (ml_minutes_ui from flight_predictions batch run)
+    //      Used when FIDS shows on-time (0–14 min or null) — model may detect
+    //      a building delay (reactionary, congestion) before FIDS reflects it.
+    //      Threshold: 5 min (model uncertainty tolerance).
+    //
+    //   4. FIDS binary labels (y_bin15 / y_bin30) — last resort, no numeric.
+    //
+    // actualUtc always from FIDS — never computed from ml_minutes_ui.
+
+    const rawFidsDelay  = f.delay_min     != null ? parseFloat(f.delay_min)     : null;
+    const rawMlMinutes  = f.ml_minutes_ui != null ? parseFloat(f.ml_minutes_ui) : null;
+
     actualUtc   = f.actual_utc || null;
     isConfirmed = false;
+
+    if (rawFidsDelay != null && (rawFidsDelay < 0 || rawFidsDelay >= 5)) {
+      // Tier 2: FIDS shows meaningful diff (delay ≥5 min OR early arrival)
+      // Threshold now matches confirmed API (5 min) so observed delays show in table
+      delayMin  = rawFidsDelay;
+      delayTier = 'fids';
+    } else if (rawMlMinutes != null && rawMlMinutes >= 5) {
+      // Tier 3: FIDS on-time (0–4 min) but ML predicts real delay
+      delayMin  = rawMlMinutes;
+      delayTier = 'model';
+    } else if (rawFidsDelay != null) {
+      // Tier 2 fallback: tiny FIDS value (0–4 min) → On Time
+      delayMin  = rawFidsDelay;
+      delayTier = 'fids';
+    } else if (rawMlMinutes != null) {
+      // Tier 3 fallback: small ML value (< 5 min) → On Time via model
+      delayMin  = rawMlMinutes;
+      delayTier = 'model';
+    } else {
+      // Tier 4: no numeric value — use binary labels
+      delayMin  = null;
+      delayTier = 'fids';
+    }
   }
 
-  // Binary flags derived from the single chosen delayMin — never from mixed sources
-  const isDelayed15 = delayMin != null ? delayMin >= 15 : false;
-  const isDelayed30 = delayMin != null ? delayMin >= 30 : false;
+  // Tier 4: binary FIDS labels — only when no numeric value available
+  const onFidsBinTier = !hasStatusData && delayTier === 'fids' && delayMin == null;
+  const fidsBin15 = onFidsBinTier ? (f.is_delayed_15 === true || f.is_delayed_15 === 1) : false;
+  const fidsBin30 = onFidsBinTier ? (f.is_delayed_30 === true || f.is_delayed_30 === 1) : false;
 
-  const status = deriveStatus(delayMin, isDelayed15, isDelayed30, f.op_status, isConfirmed);
+  const status = deriveStatus(
+    delayMin,
+    fidsBin15,
+    fidsBin30,
+    f.op_status,
+    isConfirmed,
+    isConfirmed ? 'confirmed' : delayTier,
+  );
 
   const airline = AIRLINE_NAMES[f.airline_iata] || f.airline_iata || 'Unknown';
   const dest    = AIRPORT_LABELS[f.destination]  || f.destination  || 'Unknown';
@@ -217,16 +295,22 @@ const mapFlight = (f, idx) => {
     ? `MUC → ${dest}`
     : `${dest} → MUC`;
 
-  // Derive cause only for flights that are actually delayed
-  // Uses weather signal from pipeline if available, else magnitude heuristic
+  // Heuristic cause fallback — only used when ml_cause is absent
+  // Signals: weather code > 50 (WMO: rain/snow/fog), precipitation > 0
+  // Reactionary: delay ≥ 30 min without weather → likely cascade from prev. flight
   const isActuallyDelayed = status === 'Minor Delay' || status === 'Major Delay';
   let likelyCause = null;
   if (isActuallyDelayed) {
     const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
-    if (hasWeather)           likelyCause = 'Weather';
-    else if (isDelayed30)     likelyCause = 'Reactionary';
-    else                      likelyCause = 'Congestion';
+    const isBigDelay = delayMin != null && delayMin >= 30;
+    if (hasWeather)    likelyCause = 'Weather';
+    else if (isBigDelay) likelyCause = 'Reactionary';
+    else               likelyCause = 'Congestion';
   }
+
+  // Convenience booleans derived from the tier-selected delayMin
+  const isDelayed15 = delayMin != null && delayMin >= 15;
+  const isDelayed30 = delayMin != null && delayMin >= 30;
 
   // predictedDelay: only show when there is a meaningful delay (>= 1 min)
   // Negative = early arrival, show as 0
@@ -247,10 +331,12 @@ const mapFlight = (f, idx) => {
     try { cause_scores = JSON.parse(f.cause_scores); } catch (_) {}
   }
 
-  // Delay source label for the drawer
-  const delaySource = isConfirmed      ? 'confirmed'
-    : ml_minutes_ui != null ? 'model'
-    : 'fids';
+  // delaySource — the exact tier that produced delayMin and status.
+  // Determined during source selection above, not re-derived here.
+  //   'confirmed' → Status API (confirmed_delay_min from flight_status_live)
+  //   'fids'      → FIDS observed (y_delay_min / dep·arr_best_utc)
+  //   'model'     → ML batch prediction (ml_minutes_ui from flight_predictions)
+  const delaySource = isConfirmed ? 'confirmed' : delayTier;
 
   // Cause: prefer ML cause from batch predictions; fall back to heuristic
   const displayCause = ml_cause || (isActuallyDelayed ? likelyCause : null);

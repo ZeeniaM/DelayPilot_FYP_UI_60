@@ -1,14 +1,17 @@
 /**
  * VisualAnalytics.js
  * ─────────────────────────────────────────────────────────────────
- * Styled-components from components.styles.js.
- * Props:
- *   liveFlights — array from predictionService (or null → use mock data)
+ * Derives trend + cause breakdown directly from the liveFlights array
+ * passed from Dashboard — the same data driving KPI cards and the
+ * flights table. No separate API call needed.
  *
- * When liveFlights is available:
- *   • Delay Trend: bins flights by hour using sched_utc, counts delayed ones
- *   • Cause Breakdown: classifies by delay magnitude as proxy for cause
- *     (until pipeline exposes cause_groups, which is a future TODO)
+ * liveFlights entries are already tier-priority resolved by
+ * predictionService.mapFlight():
+ *   status       — 'On Time' / 'Minor Delay' / 'Major Delay' / 'Early' / ...
+ *   delay_min    — confirmed_delay_min → ml_minutes_ui → y_delay_min
+ *   delaySource  — 'confirmed' / 'fids' / 'model'
+ *   ml_cause     — from flight_predictions batch output
+ *   sched_utc    — scheduled time UTC string
  * ─────────────────────────────────────────────────────────────────
  */
 
@@ -29,77 +32,95 @@ const CHART_COLORS = {
   orange: '#F5A623',
   purple: '#7B1FA2',
   silver: '#c4aead',
-  green:  '#2ECC71',
 };
 
-// ── Mock fallback data ───────────────────────────────────────────
-const MOCK_TREND = Array.from({ length: 24 }, (_, i) => ({
-  hour:    `${String(i).padStart(2, '0')}:00`,
-  delayed: Math.max(0, Math.round(10 + 15 * Math.sin((i / 24) * Math.PI * 2) + (i % 5))),
-}));
-
-const MOCK_CAUSES = [
-  { name: 'Reactionary', value: 42 },
-  { name: 'Congestion',  value: 25 },
-  { name: 'Weather',     value: 23 },
-  { name: 'Other',       value: 10 },
-];
-
-// ── Derive hourly trend from live flights ────────────────────────
+// ── Derive 24-hour delay trend ────────────────────────────────────────────────
+// Uses sched_utc converted to local time (Europe/Berlin) so hour buckets
+// match what the user sees in the flights table.
 const buildTrend = (flights) => {
-  const buckets = {};
-  for (let h = 0; h < 24; h++) buckets[String(h).padStart(2, '0')] = 0;
+  const total   = {};
+  const delayed = {};
+  for (let h = 0; h < 24; h++) {
+    total[h]   = 0;
+    delayed[h] = 0;
+  }
 
   flights.forEach(f => {
     if (!f.sched_utc) return;
-    const h = String(new Date(f.sched_utc).getUTCHours()).padStart(2, '0');
-    if (f.is_delayed_15) buckets[h] = (buckets[h] || 0) + 1;
+    const localHour = new Date(f.sched_utc).getHours(); // browser local time
+    total[localHour]++;
+    if (f.status === 'Minor Delay' || f.status === 'Major Delay') {
+      delayed[localHour]++;
+    }
   });
 
-  return Object.entries(buckets).map(([h, delayed]) => ({
-    hour: `${h}:00`,
-    delayed,
+  return Array.from({ length: 24 }, (_, h) => ({
+    hour:    `${String(h).padStart(2, '0')}:00`,
+    total:   total[h],
+    delayed: delayed[h],
   }));
 };
 
-// ── Derive cause breakdown proxy from delay magnitudes ───────────
+// ── Derive cause breakdown ────────────────────────────────────────────────────
+// Priority: ml_cause from batch predictions (real signal).
+// Fallback: classify by delay magnitude as proxy when ml_cause not available.
 const buildCauses = (flights) => {
-  const delayed = flights.filter(f => f.delay_min > 0);
-  if (delayed.length === 0) return MOCK_CAUSES;
+  const delayedFlights = flights.filter(
+    f => f.status === 'Minor Delay' || f.status === 'Major Delay'
+  );
+  if (delayedFlights.length === 0) return null;
 
-  // Proxy classification by delay band:
-  //   0–20 min  → likely Reactionary (small propagated delays)
-  //   20–45 min → likely Congestion
-  //   45+ min   → likely Weather or Major Reactionary
-  let reactionary = 0, congestion = 0, weather = 0, other = 0;
-  delayed.forEach(f => {
-    if (f.delay_min < 20)     reactionary++;
-    else if (f.delay_min < 45) congestion++;
-    else                       weather++;
+  const counts = {};
+
+  delayedFlights.forEach(f => {
+    let cause = f.ml_cause || null;
+
+    if (!cause) {
+      // Fallback heuristic: classify by delay band
+      const d = f.delay_min || 0;
+      if (d < 20)      cause = 'Reactionary';
+      else if (d < 45) cause = 'Congestion';
+      else             cause = 'Weather';
+    }
+
+    counts[cause] = (counts[cause] || 0) + 1;
   });
-  other = Math.max(0, Math.round(delayed.length * 0.05));
 
-  return [
-    { name: 'Reactionary', value: reactionary },
-    { name: 'Congestion',  value: congestion  },
-    { name: 'Weather',     value: weather     },
-    { name: 'Other',       value: other       },
-  ].filter(c => c.value > 0);
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value]) => ({ name, value }));
 };
 
-// ── Component ────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 const VisualAnalytics = ({ liveFlights = null }) => {
-  const trend  = useMemo(() => liveFlights ? buildTrend(liveFlights)  : MOCK_TREND,  [liveFlights]);
-  const causes = useMemo(() => liveFlights ? buildCauses(liveFlights) : MOCK_CAUSES, [liveFlights]);
+  const trend  = useMemo(() => liveFlights ? buildTrend(liveFlights)  : null, [liveFlights]);
+  const causes = useMemo(() => liveFlights ? buildCauses(liveFlights) : null, [liveFlights]);
 
+  const hasFlights = liveFlights && liveFlights.length > 0;
+  const hasCauses  = causes && causes.length > 0;
+
+  // Trend data — zeros when no data yet
+  const trendData = trend ?? Array.from({ length: 24 }, (_, h) => ({
+    hour: `${String(h).padStart(2, '0')}:00`, total: 0, delayed: 0,
+  }));
+
+  // Cause data — show proportional placeholder when no delays detected
+  const causeData = hasCauses ? causes : [
+    { name: 'No delays detected', value: 1 },
+  ];
+  const causeColors = hasCauses
+    ? [CHART_COLORS.blue, CHART_COLORS.orange, CHART_COLORS.purple, CHART_COLORS.silver]
+    : ['#e2e8f0'];
+
+  // ── Chart configs ─────────────────────────────────────────────────────────
   const lineData = {
-    labels: trend.map(d => d.hour),
+    labels: trendData.map(d => d.hour),
     datasets: [{
       label: 'Delayed Flights',
-      data: trend.map(d => d.delayed),
-      borderColor: CHART_COLORS.blue,
+      data:  trendData.map(d => d.delayed),
+      borderColor:     CHART_COLORS.blue,
       backgroundColor: 'rgba(100,149,237,0.1)',
-      tension: 0.35,
+      tension:     0.35,
       borderWidth: 2,
       pointRadius: 3,
     }],
@@ -111,39 +132,56 @@ const VisualAnalytics = ({ liveFlights = null }) => {
     plugins: { legend: { display: false }, tooltip: { intersect: false } },
     scales: {
       x: { ticks: { color: '#666', maxTicksLimit: 8 } },
-      y: { ticks: { color: '#666', precision: 0 }, grid: { color: '#f1f3f4' } },
+      y: {
+        ticks: { color: '#666', precision: 0 },
+        beginAtZero: true,
+        grid: { color: '#f1f3f4' },
+      },
     },
   };
 
   const doughnutData = {
-    labels: causes.map(c => c.name),
+    labels: causeData.map(c => c.name),
     datasets: [{
-      data: causes.map(c => c.value),
-      backgroundColor: [CHART_COLORS.blue, CHART_COLORS.orange, CHART_COLORS.purple, CHART_COLORS.silver],
-      borderWidth: 0,
-      hoverOffset: 6,
+      data:            causeData.map(c => c.value),
+      backgroundColor: causeColors,
+      borderWidth:  0,
+      hoverOffset:  6,
     }],
   };
 
   const doughnutOptions = {
     cutout: '62%',
-    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 12 } } } },
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 12 } } },
+      tooltip: { enabled: hasCauses },
+    },
     maintainAspectRatio: false,
     responsive: true,
   };
 
-  const subtitle = liveFlights
-    ? `${liveFlights.length} flights today`
-    : 'Demo data';
+  // ── Subtitles ─────────────────────────────────────────────────────────────
+  const totalDelayed = liveFlights
+    ? liveFlights.filter(f => f.status === 'Minor Delay' || f.status === 'Major Delay').length
+    : 0;
+
+  const trendSubtitle = hasFlights
+    ? `${liveFlights.length} flights · ${totalDelayed} delayed`
+    : 'Awaiting data…';
+
+  const causeSubtitle = hasFlights && !hasCauses
+    ? 'No delays in current window'
+    : null;
 
   return (
     <AnalyticsSection>
       <AnalyticsGrid>
+
         <AnalyticsCard>
           <AnalyticsTitle>
             Delay Trend – Today by Hour
             <span style={{ fontSize: 11, color: '#666', fontWeight: 400, marginLeft: 8 }}>
-              {subtitle}
+              {trendSubtitle}
             </span>
           </AnalyticsTitle>
           <div style={{ width: '100%', height: 260 }}>
@@ -152,11 +190,24 @@ const VisualAnalytics = ({ liveFlights = null }) => {
         </AnalyticsCard>
 
         <AnalyticsCard>
-          <AnalyticsTitle>Delay Cause Breakdown</AnalyticsTitle>
+          <AnalyticsTitle>
+            Delay Cause Breakdown
+            {hasCauses && (
+              <span style={{ fontSize: 11, color: '#666', fontWeight: 400, marginLeft: 8 }}>
+                {totalDelayed} delayed flights
+              </span>
+            )}
+          </AnalyticsTitle>
+          {causeSubtitle && (
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+              {causeSubtitle}
+            </div>
+          )}
           <div style={{ width: '100%', height: 260 }}>
             <Doughnut data={doughnutData} options={doughnutOptions} />
           </div>
         </AnalyticsCard>
+
       </AnalyticsGrid>
     </AnalyticsSection>
   );
