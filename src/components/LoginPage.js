@@ -190,7 +190,7 @@ const LoginPage = ({ onLogin, onGoBack }) => {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
-    role: 'Admin'
+    role: 'APOC' // Default role
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -391,10 +391,10 @@ const LoginPage = ({ onLogin, onGoBack }) => {
               value={formData.role}
               onChange={handleInputChange}
             >
-              <option value="Admin">Admin</option>
               <option value="APOC">APOC</option>
               <option value="AOC">AOC</option>
               <option value="ATC">ATC</option>
+              <option value="Admin">Admin</option>
             </Select>
           </InputGroup>
 
