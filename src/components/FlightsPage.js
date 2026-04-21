@@ -11,6 +11,7 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { createGlobalStyle } from 'styled-components';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
+import { createCase } from '../services/mitigationService';
 import {
   PageContainer, MainContent, ContentArea,
   PageTitle, IconCircleButton,
@@ -134,9 +135,26 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
     setSelectedFlight(null);
   };
 
-  const handleAddToMitigation = () => {
-    console.log(`Adding ${selectedFlight?.flightNo} to mitigation board`);
-    handleCloseDrawer();
+  const handleAddToMitigation = async () => {
+    if (!selectedFlight) return;
+    try {
+      const f = selectedFlight;
+      await createCase({
+        flight_number: f.flightNo,
+        sched_utc: f.sched_utc,
+        airline_code: f.airline_code,
+        route: f.route,
+        predicted_delay_min: f.delay_min || f.ml_minutes_ui,
+        risk_level: f.status === 'Major Delay' ? 'high' : f.status === 'Minor Delay' ? 'medium' : 'low',
+        likely_cause: f.likelyCause || null,
+        tagged_causes: f.likelyCause ? [f.likelyCause] : [],
+      });
+      handleCloseDrawer();
+      onTabChange('Mitigation Board');
+    } catch (error) {
+      console.error('Failed to add flight to mitigation board:', error);
+      alert('Failed to add to mitigation board. Please try again.');
+    }
   };
 
   return (

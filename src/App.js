@@ -11,6 +11,7 @@ import MitigationBoard from './components/MitigationBoard';
 import UserManagement  from './components/UserManagement';
 import Settings        from './components/Settings';
 import Profile         from './components/Profile';
+import { createCase }  from './services/mitigationService';
 import './App.css';
 import { GlobalFonts } from './styles/components.styles';
 
@@ -73,12 +74,36 @@ function App() {
     sync();
   }, []);
 
-  // Add to Board: mark isOnBoard — NO navigation, NO dialog close
+  // Add to Board: mark isOnBoard and create a case in the DB
   // User sees button turn green immediately, navigates manually.
+  // Also attempts to create the case in the mitigation database asynchronously
   const handleAlertAddToBoard = useCallback((flightNo) => {
     const entry = storeRef.current.get(flightNo);
-    if (entry) storeRef.current.set(flightNo, { ...entry, isOnBoard: true });
-    sync();
+    if (entry) {
+      storeRef.current.set(flightNo, { ...entry, isOnBoard: true });
+      sync();
+
+      // Async: create the case in the database
+      if (entry.flight) {
+        const flight = entry.flight;
+        try {
+          createCase({
+            flight_number: flight.flightNo,
+            sched_utc: flight.sched_utc,
+            airline_code: flight.airline_code,
+            route: flight.route,
+            predicted_delay_min: flight.delay_min || null,
+            risk_level: flight.status === 'Major Delay' ? 'high' : 'medium',
+            likely_cause: flight.likelyCause || null,
+            tagged_causes: flight.likelyCause ? [flight.likelyCause] : [],
+          }).catch(e => {
+            console.warn('Case creation from alert failed:', e);
+          });
+        } catch (e) {
+          console.warn('Case creation from alert error:', e);
+        }
+      }
+    }
   }, []);
 
   const handleLogin = (userData) => {

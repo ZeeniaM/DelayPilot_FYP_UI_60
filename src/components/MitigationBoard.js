@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import styled from 'styled-components';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
+import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, getComments, addComment } from '../services/mitigationService';
 
 const PageContainer = styled.div`
   min-height: 100vh;
@@ -280,12 +281,7 @@ const Pill = styled.span`
   font-weight: 700;
 `;
 
-const initialCases = [
-  { id: 'c1', flightNo: 'LH204', airline: 'Lufthansa', severity: 'moderate', cause: 'Weather', assignee: 'AM', column: 'identified', unseen: true, route: 'MUC → FRA', delayMin: 18 },
-  { id: 'c2', flightNo: 'AF911', airline: 'Air France', severity: 'major', cause: 'Reactionary', assignee: 'BK', column: 'inprogress', unseen: false, route: 'CDG → MUC', delayMin: 42 },
-  { id: 'c3', flightNo: 'BA752', airline: 'British Airways', severity: 'minor', cause: 'Traffic', assignee: 'CT', column: 'verified', unseen: true, route: 'LHR → MUC', delayMin: 12 },
-  { id: 'c4', flightNo: 'SN120', airline: 'Brussels Airlines', severity: 'minor', cause: 'Other', assignee: 'DA', column: 'resolved', unseen: false, route: 'BRU → MUC', delayMin: 8 },
-];
+const initialCases = []; // Will be populated from API
 
 // Mock flights list for selector (subset representative of system flights)
 const flightsCatalog = [
@@ -304,7 +300,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [query, setQuery] = useState('');
   const [filterAirline, setFilterAirline] = useState('All');
   const [filterSeverity, setFilterSeverity] = useState('All');
-  const [cases, setCases] = useState(initialCases);
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(null);
   const [pendingMove, setPendingMove] = useState(null);
   const [drawerCase, setDrawerCase] = useState(null);
@@ -320,6 +317,26 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [closedCases, setClosedCases] = useState([]);
   const [showClosed, setShowClosed] = useState(false);
   const [cardNotifications, setCardNotifications] = useState(new Set());
+
+  // Load cases from API on mount
+  useEffect(() => {
+    const loadBoard = async () => {
+      setLoading(true);
+      try {
+        const [activeCasesResp, closedCasesResp] = await Promise.all([
+          getCases().catch(() => ({ cases: [] })),
+          getClosedCases().catch(() => ({ cases: [] }))
+        ]);
+        setCases(activeCasesResp.cases || []);
+        setClosedCases(closedCasesResp.cases || []);
+      } catch (error) {
+        console.error('Error loading mitigation board:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadBoard();
+  }, []);
 
   const handleCreateTagEnter = (e) => {
     if (e.key === 'Enter') {
@@ -344,13 +361,43 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const canEdit = userRole === 'APOC' || userRole === 'AOC';
   const canReassign = userRole === 'Admin';
 
+  // Map API status to UI column key
+  const statusToColumn = {
+    'delayNoted': 'identified',
+    'inProgress': 'inprogress',
+    'verified': 'verified',
+    'resolved': 'resolved',
+    'closed': 'closed'
+  };
+
+  const columnToStatus = {
+    'identified': 'delayNoted',
+    'inprogress': 'inProgress',
+    'verified': 'verified',
+    'resolved': 'resolved',
+    'closed': 'closed'
+  };
+
+  // Normalize cases from API to UI format
+  const normalizedCases = cases.map(c => ({
+    ...c,
+    column: statusToColumn[c.status] || 'identified',
+    severity: c.risk_level === 'high' ? 'major' : c.risk_level === 'medium' ? 'moderate' : 'minor',
+    cause: c.likely_cause || 'Unknown',
+    route: c.route || '—',
+    delayMin: c.predicted_delay_min || 0,
+    flightNo: c.flight_number,
+    airline: c.airline_code || '—',
+    unseen: false // API doesn't track this, assume not unseen
+  }));
+
   const filtered = useMemo(() => {
-    return cases.filter(c =>
+    return normalizedCases.filter(c =>
       (query === '' || c.flightNo.toLowerCase().includes(query.toLowerCase()) || c.airline.toLowerCase().includes(query.toLowerCase())) &&
       (filterAirline === 'All' || c.airline === filterAirline) &&
       (filterSeverity === 'All' || c.severity === filterSeverity)
     );
-  }, [cases, query, filterAirline, filterSeverity]);
+  }, [normalizedCases, query, filterAirline, filterSeverity]);
 
   const columns = [
     { key: 'identified', title: 'Delay Noted' },
@@ -379,32 +426,56 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     setDragging(null);
   };
 
-  const confirmMove = () => {
+  const confirmMove = async () => {
     if (!pendingMove) return;
-    setCases(prev => prev.map(c => c.id === pendingMove.id ? { ...c, column: pendingMove.to } : c));
-    // Add notification for column move
-    setCardNotifications(prev => new Set(prev).add(pendingMove.id));
+    try {
+      // Convert column key to status (identified→delayNoted, inprogress→inProgress, etc.)
+      const statusMap = {
+        'identified': 'delayNoted',
+        'inprogress': 'inProgress',
+        'verified': 'verified',
+        'resolved': 'resolved'
+      };
+      await updateCaseStatus(pendingMove.id, statusMap[pendingMove.to] || pendingMove.to);
+      setCases(prev => prev.map(c => c.id === pendingMove.id ? { ...c, column: pendingMove.to } : c));
+      setCardNotifications(prev => new Set(prev).add(pendingMove.id));
+    } catch (error) {
+      console.error('Error updating case status:', error);
+      alert('Failed to move case. Please try again.');
+    }
     setPendingMove(null);
   };
   const cancelMove = () => setPendingMove(null);
 
-  const closeCase = (c) => {
-    if (!(canEdit)) return;
-    const snapshot = { ...c, closedAt: new Date().toISOString() };
-    setClosedCases(prev => [snapshot, ...prev]);
-    setCases(prev => prev.filter(x => x.id !== c.id));
+  const handleCloseCase = async (c) => {
+    if (!canEdit) return;
+    try {
+      await closeCase(c.id);
+      setClosedCases(prev => [{ ...c, closed_at: new Date().toISOString() }, ...prev]);
+      setCases(prev => prev.filter(x => x.id !== c.id));
+    } catch (error) {
+      console.error('Error closing case:', error);
+      alert('Failed to close case. Please try again.');
+    }
   };
 
-  const openCase = (c) => {
+  const openCase = async (c) => {
     setDrawerMode('view');
-    setDrawerCase({ ...c, unseen: false, tags: new Set(), comments: [] });
+    setDrawerCase({ ...c, tags: new Set((c.tagged_causes || [])) });
     setCases(prev => prev.map(x => x.id === c.id ? { ...x, unseen: false } : x));
-    // Clear notification when card is opened
     setCardNotifications(prev => {
       const next = new Set(prev);
       next.delete(c.id);
       return next;
     });
+    // Load comments for this case
+    try {
+      const caseComments = await getComments(c.id);
+      setComments(caseComments || []);
+    } catch (error) {
+      console.warn('Error loading comments:', error);
+      setComments([]);
+    }
   };
 
   const toggleTag = (name) => {
@@ -416,9 +487,17 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     });
   };
 
-  const saveTags = () => {
+  const saveTags = async () => {
     if (!drawerCase) return;
-    setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, cause: (drawerCase.tags.values().next().value || c.cause) } : c));
+    try {
+      const tagsArray = Array.from(drawerCase.tags || []);
+      await updateCase(drawerCase.id, { tagged_causes: tagsArray });
+      setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: tagsArray } : c));
+      setCardNotifications(prev => new Set(prev).add(drawerCase.id));
+    } catch (error) {
+      console.error('Error saving tags:', error);
+      alert('Failed to save tags. Please try again.');
+    }
   };
 
   const openCreateDrawer = () => {
@@ -441,12 +520,17 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     });
   };
 
-  const addComment = (text) => {
-    if (!text) return;
-    setComments(prev => [...prev, { id: Date.now(), text, at: new Date().toISOString(), by: 'APOC' }]);
-    // Add notification for the current case being viewed
-    if (drawerCase && drawerMode === 'view') {
-      setCardNotifications(prev => new Set(prev).add(drawerCase.id));
+  const addCommentHandler = async (text) => {
+    if (!text || !drawerCase) return;
+    try {
+      const newComment = await addComment(drawerCase.id, text, userName);
+      setComments(prev => [...prev, newComment]);
+      if (drawerCase && drawerMode === 'view') {
+        setCardNotifications(prev => new Set(prev).add(drawerCase.id));
+      }
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      alert('Failed to add comment. Please try again.');
     }
   };
 
@@ -456,30 +540,36 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     return 'minor';
   };
 
-  const saveNewCase = () => {
+  const saveNewCase = async () => {
     if (!selectedFlight) return;
-    const rawTags = Array.from(createTags);
-    const normalizedTags = rawTags; // 'Other' pill removed; free-text tagging supports custom causes
-    const primaryCause = normalizedTags[0] || (selectedFlight.likelyCause || 'Other');
-    const c = {
-      id: `c${Date.now()}`,
-      flightNo: selectedFlight.flightNo,
-      airline: selectedFlight.airline,
-      route: selectedFlight.route,
-      delayMin: selectedFlight.predictedDelay || 0,
-      severity: severityFromDelay(selectedFlight.predictedDelay || 0),
-      cause: primaryCause,
-      tags: normalizedTags,
-      assignee: 'AM',
-      column: 'identified',
-      unseen: true,
-      createdAt: new Date().toISOString(),
-      comments,
-      deadline,
-    };
-    setCases(prev => [c, ...prev]);
-    setDrawerCase(null);
-    setDrawerMode('view');
+    try {
+      const rawTags = Array.from(createTags);
+      const primaryCause = rawTags[0] || (selectedFlight.likelyCause || 'Other');
+      
+      const newCaseData = {
+        flight_number: selectedFlight.flightNo,
+        sched_utc: selectedFlight.sched_utc || new Date().toISOString(),
+        airline_code: selectedFlight.airline?.substring(0, 2) || null,
+        route: selectedFlight.route,
+        predicted_delay_min: selectedFlight.predictedDelay || 0,
+        risk_level: severityFromDelay(selectedFlight.predictedDelay) === 'major' ? 'high' : 'medium',
+        likely_cause: selectedFlight.likelyCause || null,
+        tagged_causes: rawTags.length > 0 ? rawTags : (selectedFlight.likelyCause ? [selectedFlight.likelyCause] : []),
+        deadline: deadline || null
+      };
+
+      const newCase = await createCase(newCaseData);
+      setCases(prev => [newCase, ...prev]);
+      setDrawerCase(null);
+      setDrawerMode('view');
+      setSelectedFlight(null);
+      setCreateTags(new Set());
+      setDeadline('');
+      setFlightQuery('');
+    } catch (error) {
+      console.error('Error creating case:', error);
+      alert('Failed to create case. Please try again.');
+    }
   };
 
   const getCauseBreakdown = (flight) => {
@@ -515,7 +605,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const airlines = ['All', ...Array.from(new Set(cases.map(c => c.airline)))];
+  const airlines = ['All', ...Array.from(new Set(normalizedCases.map(c => c.airline)))];
   const severities = ['All', 'minor', 'moderate', 'major'];
 
   return (
@@ -561,7 +651,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                   {filtered.filter(c => c.column === col.key).map(c => (
                     <Card key={c.id} draggable={canEdit} onDragStart={(e) => onDragStart(e, c.id)} onClick={() => openCase(c)}>
                       {cardNotifications.has(c.id) && <NotificationDot />}
-                      <CloseIcon title="Close case" onClick={(e) => { e.stopPropagation(); closeCase(c); }}>✕</CloseIcon>
+                      <CloseIcon title="Close case" onClick={(e) => { e.stopPropagation(); handleCloseCase(c); }}>✕</CloseIcon>
                       <CardTitle>{c.flightNo}</CardTitle>
                       <CardSub>{c.airline} • {c.route}</CardSub>
                       <div style={{ display:'flex', gap:8, marginTop:8, alignItems:'center' }}>
@@ -611,7 +701,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                 <button
                   title="Send"
                   style={{ border:'none', background:'#1A4B8F', color:'#fff', width:40, height:40, borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
-                  onClick={() => { const input = document.getElementById('panelCommentInput'); if (input && input.value) { addComment(input.value); input.value=''; }}}
+                  onClick={() => { const input = document.getElementById('panelCommentInput'); if (input && input.value) { addCommentHandler(input.value); input.value=''; }}}
                 >
                   ➤
                 </button>

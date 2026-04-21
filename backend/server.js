@@ -38,6 +38,7 @@ app.get('/api/health', (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/predictions', require('./routes/predictions'));
+app.use('/api/mitigation', require('./routes/mitigation'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
