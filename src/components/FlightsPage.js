@@ -18,8 +18,6 @@ import {
   FullTableContainer, Table, TableHead, FullTableHeaderCell, TableBody, TableRow, TableCell,
   FlightNumber, AirlineInfo, RouteInfo, TimeCell, ScheduledTime, ActualTime,
   DelayValue, CauseTag, StatusPill, ChevronIcon,
-  SideAlertsPanel, SideAlertsHeader, SideAlertsTitle, SideAlertIcon,
-  SideAlertsContent, SideAlertCard, SideAlertFlight, SideAlertMessage,
   DetailDrawer, DrawerHeader, DrawerTitle, DrawerSubtitle,
   DrawerContent, DrawerSection, DrawerSectionTitle, DrawerFooter, DrawerButton,
   PredictionBlock, PredictionRow, PredictionLabel, PredictionValue,
@@ -56,18 +54,6 @@ const opStatusLabel = (s) => {
   return map[s] || s || 'Scheduled';
 };
 
-// Build alerts from delayed flights
-const buildAlerts = (flights) =>
-  flights
-    .filter(f => f.status === 'Major Delay' || (f.status === 'Minor Delay' && f.predictedDelay >= 15))
-    .slice(0, 6)
-    .map((f, i) => ({
-      id: i + 1,
-      flightNo: f.flightNo,
-      severity: f.status === 'Major Delay' ? 'high' : 'moderate',
-      message: `${f.status === 'Major Delay' ? 'Major' : 'Minor'} delay detected. Route: ${f.route}. Est. delay: +${f.predictedDelay} min.`,
-    }));
-
 // ── Component ────────────────────────────────────────────────────
 const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
@@ -84,8 +70,6 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
 
   const [selectedFlight,    setSelectedFlight]    = useState(null);
   const [drawerOpen,        setDrawerOpen]        = useState(false);
-  const [dismissedAlerts,   setDismissedAlerts]   = useState(new Set());
-  const [boardFlights,      setBoardFlights]      = useState([]);
   const [prediction,        setPrediction]        = useState(null);
   const [predLoading,       setPredLoading]       = useState(false);
 
@@ -137,8 +121,6 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
       return (a.sched_utc || '').localeCompare(b.sched_utc || '');
     });
   }, [flights, searchTerm, statusFilter, movementFilter]);
-
-  const alerts = useMemo(() => buildAlerts(flights), [flights]);
 
   // Row click → open drawer with pre-computed data (no extra API call)
   const handleFlightClick = (flight) => {
@@ -277,54 +259,6 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
               </Table>
             </FullTableContainer>
           </ContentArea>
-
-          {/* Side alerts panel */}
-          <SideAlertsPanel>
-            <SideAlertsHeader>
-              <SideAlertsTitle>
-                <SideAlertIcon>⚠</SideAlertIcon>
-                Active Alerts
-              </SideAlertsTitle>
-            </SideAlertsHeader>
-            <SideAlertsContent>
-              {(() => {
-                const visibleAlerts = alerts.filter(a => !dismissedAlerts.has(a.id));
-                if (visibleAlerts.length === 0) {
-                  return <div style={{ padding: 12, color: '#666', fontSize: 13 }}>No major flight delays detected.</div>;
-                }
-                return visibleAlerts.map(a => {
-                  const onBoard = boardFlights.includes(a.flightNo);
-                  return (
-                    <SideAlertCard key={a.id} severity={a.severity}>
-                      <SideAlertFlight>{a.flightNo}</SideAlertFlight>
-                      <SideAlertMessage>{a.message}</SideAlertMessage>
-                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                        <button
-                          style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#f1f3f4', color: '#333', cursor: 'pointer', fontSize: 11 }}
-                          onClick={e => {
-                            e.stopPropagation();
-                            setDismissedAlerts(prev => new Set([...prev, a.id]));
-                          }}
-                        >Dismiss</button>
-                        <button
-                          style={{
-                            padding: '5px 10px', borderRadius: 6, border: 'none',
-                            background: onBoard ? '#166534' : '#1A4B8F',
-                            color: '#fff', cursor: 'pointer', fontSize: 11,
-                            transition: 'background 0.2s',
-                          }}
-                          onClick={e => {
-                            e.stopPropagation();
-                            if (!onBoard) setBoardFlights(prev => [...prev, a.flightNo]);
-                          }}
-                        >{onBoard ? '✓ On Board' : 'Add to Board'}</button>
-                      </div>
-                    </SideAlertCard>
-                  );
-                });
-              })()}
-            </SideAlertsContent>
-          </SideAlertsPanel>
         </MainContent>
 
         {/* Detail drawer — all data from pre-computed mapFlight() object, no extra API call */}

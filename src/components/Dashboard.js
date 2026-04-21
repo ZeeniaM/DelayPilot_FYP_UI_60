@@ -1,16 +1,6 @@
 /**
- * Dashboard.js
- * ─────────────────────────────────────────────────────────────────
- * Data flow:
- *   App.js owns: refreshKey, liveAlerts, notifOpen, notifCount
- *   Dashboard fetches flights + weather, passes results up via:
- *     onAlertsUpdate(alerts) → App.js stores them → NavBar bell uses them
- *
- *   Refresh button: re-increments App-level refreshKey (via onRefreshRequest)
- *   which triggers useEffect → re-runs load() → re-fetches all data
- * ─────────────────────────────────────────────────────────────────
+ * Dashboard.js — COMPLETE REPLACEMENT
  */
-
 import React, { useState, useEffect, useCallback } from 'react';
 import NavigationBar from './NavigationBar';
 import { PageLayoutWithBackground } from './PageLayout';
@@ -26,30 +16,27 @@ import {
   fetchFlights, fetchWeather, computeKPIs,
 } from '../services/predictionService';
 
-// Build alerts list from delayed flights using status field (matches flights table)
+// Major Delay only — one entry per flight, carries full flight object
 const buildAlerts = (flights) => {
   if (!flights) return [];
   return flights
-    .filter(f => f.status === 'Minor Delay' || f.status === 'Major Delay')
-    .slice(0, 10)
-    .map((f, i) => ({
-      id: i + 1,
-      flightNo:  f.flightNo,
-      severity:  f.status === 'Major Delay' ? 'high' : 'moderate',
-      message:   f.status === 'Major Delay'
-        ? `Major delay (≥30 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`
-        : `Minor delay (≥15 min). Route: ${f.route}. Est. delay: ${f.predictedDelay} min.`,
-      time: 'just now',
+    .filter(f => f.status === 'Major Delay')
+    .map(f => ({
+      flightNo: f.flightNo,
+      severity: 'high',
+      message:  `Major delay — ${f.route}. Est. delay: ${f.predictedDelay} min.${f.likelyCause ? ` Cause: ${f.likelyCause}.` : ''}`,
+      time:     f.scheduledTime || '—',
+      flight:   f,
     }));
 };
 
 const Dashboard = ({
   userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
-  // Bell props from App.js — passed straight through to NavigationBar
   notifCount, hasNewNotif, notifOpen, liveAlerts: appAlerts,
   onNotifClick, onNotifClose,
-  // Refresh wiring from App.js
-  refreshKey = 0, onRefreshRequest, onAlertsUpdate,
+  onAlertDismiss, onAlertAddToBoard,
+  refreshKey = 0, onRefreshRequest,
+  onAlertsUpdate,   // App.js passes handleAlertsMerge here
 }) => {
   const [liveFlights, setLiveFlights] = useState(null);
   const [liveWeather, setLiveWeather] = useState(null);
@@ -63,12 +50,11 @@ const Dashboard = ({
         fetchFlights(),
         fetchWeather(),
       ]);
-
       if (flights) {
         setLiveFlights(flights);
         setLiveKPIs(computeKPIs(flights));
-        const alerts = buildAlerts(flights);
-        onAlertsUpdate && onAlertsUpdate(alerts); // push up to App.js
+        // Merge (not replace) alerts in App.js store
+        onAlertsUpdate && onAlertsUpdate(buildAlerts(flights));
       }
       if (weather) setLiveWeather(weather);
     } finally {
@@ -76,7 +62,6 @@ const Dashboard = ({
     }
   }, [onAlertsUpdate]);
 
-  // Re-fetch whenever App.js increments refreshKey
   useEffect(() => { load(); }, [load, refreshKey]);
 
   return (
@@ -94,12 +79,14 @@ const Dashboard = ({
           liveAlerts={appAlerts || []}
           onNotifClick={onNotifClick}
           onNotifClose={onNotifClose}
+          onAlertDismiss={onAlertDismiss}
+          onAlertAddToBoard={onAlertAddToBoard}
         />
         <MainContent>
           <ContentArea>
             <KPICards
               loading={loading}
-              onRefresh={onRefreshRequest}   // triggers App-level refreshKey bump
+              onRefresh={onRefreshRequest}
               liveKPIs={liveKPIs}
             />
             <VisualAnalytics liveFlights={liveFlights} />

@@ -9,9 +9,9 @@ if (process.env.DATABASE_URL) {
   poolConfig = {
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DB_SSL !== 'false' ? { rejectUnauthorized: false } : false,
-    max: 20, // Maximum number of clients in the pool
-    idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-    connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection could not be established
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
   };
 } else {
   // Use individual parameters (for local PostgreSQL or custom setup)
@@ -37,7 +37,6 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('❌ Unexpected error on idle client', err);
-  // Don't exit process, let it try to reconnect
 });
 
 // Helper function to execute queries with retry logic
@@ -47,10 +46,14 @@ const queryWithRetry = async (text, params, retries = 3) => {
       const result = await pool.query(text, params);
       return result;
     } catch (error) {
-      // If it's a connection error and we have retries left, wait and retry
-      if ((error.code === '08006' || error.code === 'ENOTFOUND' || error.code === 'ETIMEDOUT') && i < retries - 1) {
+      if (
+        (error.code === '08006' ||
+          error.code === 'ENOTFOUND' ||
+          error.code === 'ETIMEDOUT') &&
+        i < retries - 1
+      ) {
         console.warn(`⚠️ Connection error, retrying... (${i + 1}/${retries})`);
-        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
         continue;
       }
       throw error;
@@ -61,7 +64,9 @@ const queryWithRetry = async (text, params, retries = 3) => {
 // Initialize database tables
 const initDatabase = async () => {
   try {
-    // Create users table if it doesn't exist
+    // ─────────────────────────────────────────────────────────────
+    // EXISTING TABLE: users
+    // ─────────────────────────────────────────────────────────────
     await queryWithRetry(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -79,17 +84,19 @@ const initDatabase = async () => {
     // Add name column if it doesn't exist (for existing databases)
     try {
       const nameColumnCheck = await queryWithRetry(`
-        SELECT column_name 
-        FROM information_schema.columns 
+        SELECT column_name
+        FROM information_schema.columns
         WHERE table_name='users' AND column_name='name'
       `);
-      
       if (nameColumnCheck.rows.length === 0) {
         await queryWithRetry(`ALTER TABLE users ADD COLUMN name VARCHAR(255)`);
         console.log('✅ Added name column to users table');
       }
     } catch (error) {
-      if (!error.message.includes('already exists') && !error.message.includes('duplicate')) {
+      if (
+        !error.message.includes('already exists') &&
+        !error.message.includes('duplicate')
+      ) {
         console.warn('Warning: Could not add name column:', error.message);
       }
     }
@@ -97,50 +104,157 @@ const initDatabase = async () => {
     // Add status column if it doesn't exist (for existing databases)
     try {
       const statusColumnCheck = await queryWithRetry(`
-        SELECT column_name 
-        FROM information_schema.columns 
+        SELECT column_name
+        FROM information_schema.columns
         WHERE table_name='users' AND column_name='status'
       `);
-      
       if (statusColumnCheck.rows.length === 0) {
-        await queryWithRetry(`ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'`);
-        // Update existing users to have active status
-        await queryWithRetry(`UPDATE users SET status = 'active' WHERE status IS NULL`);
+        await queryWithRetry(
+          `ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'`
+        );
+        await queryWithRetry(
+          `UPDATE users SET status = 'active' WHERE status IS NULL`
+        );
         console.log('✅ Added status column to users table');
       }
     } catch (error) {
-      if (!error.message.includes('already exists') && !error.message.includes('duplicate')) {
+      if (
+        !error.message.includes('already exists') &&
+        !error.message.includes('duplicate')
+      ) {
         console.warn('Warning: Could not add status column:', error.message);
       }
     }
 
-    // Create index on username for faster lookups
+    // Index on username for fast login lookups
     await queryWithRetry(`
       CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)
     `);
 
+    // ─────────────────────────────────────────────────────────────
+    // NEW TABLE: mitigation_cases
+    //
+    // One row per Kanban card on the Mitigation Tracker Board.
+    // A case is linked to a flight by (flight_number, sched_utc) —
+    // the same composite key the pipeline uses — so no foreign key
+    // into pipeline tables is needed.
+    //
+    // created_by_user_id references users(id) with ON DELETE SET NULL
+    // so cases survive account deletion.
+    //
+    // tagged_causes is a native PostgreSQL TEXT[] array, which keeps
+    // the schema simple and avoids JSON parsing overhead.
+    //
+    // status lifecycle (matches STD-1 in SDS):
+    //   'delayNoted' → 'inProgress' → 'verified' → 'resolved' → 'closed'
+    //   Any status can transition directly to 'closed'.
+    // ─────────────────────────────────────────────────────────────
+    await queryWithRetry(`
+      CREATE TABLE IF NOT EXISTS mitigation_cases (
+        id                  SERIAL PRIMARY KEY,
+        flight_number       VARCHAR(20)  NOT NULL,
+        sched_utc           TIMESTAMPTZ  NOT NULL,
+        airline_code        VARCHAR(10),
+        route               VARCHAR(30),
+        predicted_delay_min FLOAT,
+        risk_level          VARCHAR(20),
+        likely_cause        VARCHAR(50),
+        tagged_causes       TEXT[]       NOT NULL DEFAULT '{}',
+        status              VARCHAR(30)  NOT NULL DEFAULT 'delayNoted',
+        deadline            TIMESTAMPTZ,
+        created_by_user_id  INTEGER      REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at          TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        resolved_at         TIMESTAMPTZ,
+        closed_at           TIMESTAMPTZ
+      )
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_cases_status
+        ON mitigation_cases(status)
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_cases_flight
+        ON mitigation_cases(flight_number, sched_utc)
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_cases_created_at
+        ON mitigation_cases(created_at DESC)
+    `);
+
+    console.log('✅ mitigation_cases table ready');
+
+    // ─────────────────────────────────────────────────────────────
+    // NEW TABLE: case_comments
+    //
+    // Internal chat messages attached to a mitigation case.
+    // ON DELETE CASCADE means all comments are automatically
+    // removed when their parent case is hard-deleted.
+    //
+    // author_username is stored redundantly (denormalised) at write
+    // time so that chat history remains readable even after a user
+    // account is deleted (author_user_id becomes NULL via SET NULL,
+    // but the username string is preserved).
+    // ─────────────────────────────────────────────────────────────
+    await queryWithRetry(`
+      CREATE TABLE IF NOT EXISTS case_comments (
+        id                SERIAL PRIMARY KEY,
+        case_id           INTEGER      NOT NULL
+                            REFERENCES mitigation_cases(id)
+                            ON DELETE CASCADE,
+        author_user_id    INTEGER      REFERENCES users(id) ON DELETE SET NULL,
+        author_username   VARCHAR(100) NOT NULL,
+        comment_text      TEXT         NOT NULL,
+        created_at        TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_comments_case_id
+        ON case_comments(case_id)
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_comments_created_at
+        ON case_comments(created_at ASC)
+    `);
+
+    console.log('✅ case_comments table ready');
+
+    // ─────────────────────────────────────────────────────────────
+    // All tables initialised
+    // ─────────────────────────────────────────────────────────────
     console.log('✅ Database tables initialized successfully');
-    
+
+    // ─────────────────────────────────────────────────────────────
+    // Default users (unchanged from original)
+    // ─────────────────────────────────────────────────────────────
     const bcrypt = require('bcrypt');
-    
-    // Default users to create
+
     const defaultUsers = [
-      { username: 'admin', password: 'admin123', role: 'Admin', email: 'admin@delaypilot.com' },
-      { username: 'apoc', password: 'apoc123', role: 'APOC', email: 'apoc@delaypilot.com' },
-      { username: 'atc', password: 'atc123', role: 'ATC', email: 'atc@delaypilot.com' },
-      { username: 'aoc', password: 'aoc123', role: 'AOC', email: 'aoc@delaypilot.com' }
+      { username: 'admin', password: 'admin123', role: 'Admin',  email: 'admin@delaypilot.com' },
+      { username: 'apoc',  password: 'apoc123',  role: 'APOC',   email: 'apoc@delaypilot.com'  },
+      { username: 'atc',   password: 'atc123',   role: 'ATC',    email: 'atc@delaypilot.com'   },
+      { username: 'aoc',   password: 'aoc123',   role: 'AOC',    email: 'aoc@delaypilot.com'   },
     ];
-    
-    // Check and create default users if they don't exist
+
     for (const user of defaultUsers) {
-      const userCheck = await queryWithRetry('SELECT * FROM users WHERE username = $1', [user.username]);
+      const userCheck = await queryWithRetry(
+        'SELECT * FROM users WHERE username = $1',
+        [user.username]
+      );
       if (userCheck.rows.length === 0) {
         const hashedPassword = await bcrypt.hash(user.password, 10);
         await queryWithRetry(
           'INSERT INTO users (username, password, role, email, status) VALUES ($1, $2, $3, $4, $5)',
           [user.username, hashedPassword, user.role, user.email, 'active']
         );
-        console.log(`✅ Default ${user.role} user created (username: ${user.username}, password: ${user.password})`);
+        console.log(
+          `✅ Default ${user.role} user created (username: ${user.username}, password: ${user.password})`
+        );
       }
     }
   } catch (error) {
@@ -157,6 +271,5 @@ const query = async (text, params) => {
 module.exports = {
   pool,
   initDatabase,
-  query
+  query,
 };
-

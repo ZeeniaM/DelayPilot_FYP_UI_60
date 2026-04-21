@@ -1,11 +1,15 @@
 /**
- * AlertsPanel.js
+ * AlertsPanel.js  — COMPLETE REPLACEMENT
  * ─────────────────────────────────────────────────────────────────
- * Styled-components from components.styles.js.
- * Props:
- *   liveAlerts — array of alert objects derived from pipeline flights
- *                where is_delayed_15 === true.
- *                Falls back to empty array (no mock alerts).
+ * Replace the entire existing AlertsPanel.js with this file.
+ *
+ * What changed vs the original:
+ *   • Receives onDismiss and onAddToBoard callbacks from parent
+ *     (Dashboard passes them down; they update App.js liveAlerts state)
+ *   • Dismiss removes the alert from the visible list immediately
+ *     (no backend call — pure local state, simple and reliable)
+ *   • Add to Board navigates to Mitigation Board tab
+ *   • Severity colour on card border: high = red left-border
  * ─────────────────────────────────────────────────────────────────
  */
 
@@ -16,15 +20,27 @@ import {
   AlertMessage, AlertActionsRow, AlertButton, AlertsEmptyState,
 } from '../styles/components.styles';
 
-const AlertsPanel = ({ liveAlerts = [] }) => {
+const AlertsPanel = ({
+  liveAlerts = [],
+  onDismiss,       // (id) => void  — called when user dismisses an alert
+  onAddToBoard,    // (flight) => void — called when user clicks Add to Board
+}) => {
   const [collapsed, setCollapsed] = useState(false);
+  // Local dismissed set — alerts disappear instantly on dismiss click
+  const [dismissed, setDismissed] = useState(new Set());
 
-  // Build display alerts:
-  // If liveAlerts provided, use those; otherwise show empty state.
-  const alerts = liveAlerts;
+  const visibleAlerts = liveAlerts.filter(a => !dismissed.has(a.id));
 
-  const handleDismiss    = (id)      => console.log(`Dismissing alert ${id}`);
-  const handleAddToBoard = (flightNo) => console.log(`Adding ${flightNo} to mitigation board`);
+  const handleDismiss = (id) => {
+    setDismissed(prev => new Set([...prev, id]));
+    onDismiss && onDismiss(id);
+  };
+
+  const handleAddToBoard = (alert) => {
+    // Dismiss the alert from panel, then navigate
+    setDismissed(prev => new Set([...prev, alert.id]));
+    onAddToBoard && onAddToBoard(alert.flight || alert);
+  };
 
   return (
     <AlertsContainer>
@@ -32,13 +48,13 @@ const AlertsPanel = ({ liveAlerts = [] }) => {
         <AlertsTitle>
           <AlertIconCircle>⚠</AlertIconCircle>
           Active Alerts
-          {alerts.length > 0 && (
+          {visibleAlerts.length > 0 && (
             <span style={{
               background: '#FEE2E2', color: '#991B1B',
               fontSize: 11, fontWeight: 700,
               padding: '2px 7px', borderRadius: 999,
             }}>
-              {alerts.length}
+              {visibleAlerts.length}
             </span>
           )}
         </AlertsTitle>
@@ -46,10 +62,10 @@ const AlertsPanel = ({ liveAlerts = [] }) => {
       </AlertsHeader>
 
       <AlertsContent collapsed={collapsed}>
-        {alerts.length === 0 ? (
-          <AlertsEmptyState>No active delay alerts at this time.</AlertsEmptyState>
+        {visibleAlerts.length === 0 ? (
+          <AlertsEmptyState>No active major delay alerts.</AlertsEmptyState>
         ) : (
-          alerts.map(alert => (
+          visibleAlerts.map(alert => (
             <AlertCard key={alert.id} severity={alert.severity}>
               <AlertCardHeader>
                 <AlertFlight>{alert.flightNo}</AlertFlight>
@@ -57,8 +73,10 @@ const AlertsPanel = ({ liveAlerts = [] }) => {
               </AlertCardHeader>
               <AlertMessage>{alert.message}</AlertMessage>
               <AlertActionsRow>
-                <AlertButton onClick={() => handleDismiss(alert.id)}>Dismiss</AlertButton>
-                <AlertButton primary onClick={() => handleAddToBoard(alert.flightNo)}>
+                <AlertButton onClick={() => handleDismiss(alert.id)}>
+                  Dismiss
+                </AlertButton>
+                <AlertButton primary onClick={() => handleAddToBoard(alert)}>
                   Add to Board
                 </AlertButton>
               </AlertActionsRow>
