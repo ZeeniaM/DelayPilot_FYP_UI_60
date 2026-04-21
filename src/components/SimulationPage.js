@@ -296,7 +296,7 @@ const Slider = ({ label, unit, value, onChange, min, max, step, baseline, disabl
 const SimulationPage = ({
   userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false,
-  liveAlerts = [], onNotifClick, onNotifClose,
+  liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard
 }) => {
   const [allFlights,     setAllFlights]     = useState([]);
   const [searchQuery,    setSearchQuery]    = useState('');
@@ -401,6 +401,7 @@ const SimulationPage = ({
           notifCount={notifCount} hasNewNotif={hasNewNotif}
           notifOpen={notifOpen} liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick} onNotifClose={onNotifClose}
+          onAlertDismiss={onAlertDismiss} onAlertAddToBoard={onAlertAddToBoard}
         />
         <MainContent>
           <ContentArea>

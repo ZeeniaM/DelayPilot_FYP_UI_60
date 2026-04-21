@@ -298,7 +298,8 @@ const flightsCatalog = [
 ];
 
 const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
-  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
+  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
+  onAlertDismiss, onAlertAddToBoard
 }) => {
   const [query, setQuery] = useState('');
   const [filterAirline, setFilterAirline] = useState('All');
@@ -532,6 +533,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
           liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick}
           onNotifClose={onNotifClose}
+          onAlertDismiss={onAlertDismiss}
+          onAlertAddToBoard={onAlertAddToBoard}
         />
       <MainContent>
         <ContentArea>

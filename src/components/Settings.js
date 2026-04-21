@@ -157,7 +157,7 @@ const ToggleSwitch = styled.label`
 
 const Settings = ({ userRole, userName, onLogout, activeTab, onTabChange,
   notifCount, hasNewNotif, notifOpen, liveAlerts,
-  onNotifClick, onNotifClose
+  onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard
 }) => {
   const [settings, setSettings] = useState({
     systemName: 'DelayPilot',

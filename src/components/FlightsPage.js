@@ -56,7 +56,8 @@ const opStatusLabel = (s) => {
 
 // ── Component ────────────────────────────────────────────────────
 const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
-  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose
+  notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
+  onAlertDismiss, onAlertAddToBoard
 }) => {
   const [flights,           setFlights]           = useState([]);
   const [loading,           setLoading]           = useState(false);
@@ -155,6 +156,8 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
           liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick}
           onNotifClose={onNotifClose}
+          onAlertDismiss={onAlertDismiss}
+          onAlertAddToBoard={onAlertAddToBoard}
         />
 
         <MainContent>
