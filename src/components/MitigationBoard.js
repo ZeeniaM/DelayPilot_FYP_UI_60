@@ -10,7 +10,7 @@ import {
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
 import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, permanentDeleteCase, getComments, addComment } from '../services/mitigationService';
-import { fetchFlights } from '../services/predictionService';
+import { fetchFlights, fetchPropagation } from '../services/predictionService';
 import API_BASE_URL from '../config/api';
 
 const WS_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api$/, '');
@@ -275,14 +275,46 @@ const Pill = styled.span`
   font-weight: 700;
 `;
 
+const ChipGroup = styled.div`
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+`;
+
+const FilterChip = styled.button`
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: none;
+  background: ${p => p.active ? (p.severity === 'major' ? '#dc2626' : p.severity === 'moderate' ? '#f59e0b' : p.severity === 'minor' ? '#3b82f6' : '#1A4B8F') : '#f1f3f4'};
+  color: ${p => p.active ? '#fff' : '#555'};
+  font-weight: ${p => p.active ? 700 : 400};
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  &:hover { opacity: 0.8; }
+`;
+
+const ClearLink = styled.button`
+  background: none;
+  border: none;
+  color: #1A4B8F;
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  margin-left: auto;
+  &:hover { opacity: 0.7; }
+`;
+
 
 const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
   onAlertDismiss, onAlertAddToBoard
 }) => {
   const [query, setQuery] = useState('');
-  const [filterAirline, setFilterAirline] = useState('All');
-  const [filterSeverity, setFilterSeverity] = useState('All');
+  const [activeAirlines, setActiveAirlines] = useState(new Set());
+  const [activeSeverities, setActiveSeverities] = useState(new Set());
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(null);
@@ -303,6 +335,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [pendingClose, setPendingClose] = useState(null);   // case object awaiting close confirm
   const [duplicateWarning, setDuplicateWarning] = useState(null); // { flightNo, colName }
   const [liveFlights, setLiveFlights] = useState([]);
+  const [propagationData, setPropagationData] = useState(null);
+  const [propagationLoading, setPropagationLoading] = useState(false);
   const wsRef = useRef(null);
 
   const loadBoard = async () => {
@@ -406,10 +440,10 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const filtered = useMemo(() => {
     return normalizedCases.filter(c =>
       (query === '' || c.flightNo.toLowerCase().includes(query.toLowerCase()) || c.airline.toLowerCase().includes(query.toLowerCase())) &&
-      (filterAirline === 'All' || c.airline === filterAirline) &&
-      (filterSeverity === 'All' || c.severity === filterSeverity)
+      (activeAirlines.size === 0 || activeAirlines.has(c.airline)) &&
+      (activeSeverities.size === 0 || activeSeverities.has(c.severity))
     );
-  }, [normalizedCases, query, filterAirline, filterSeverity]);
+  }, [normalizedCases, query, activeAirlines, activeSeverities]);
 
   const columns = [
     { key: 'identified', title: 'Delay Noted' },
@@ -518,12 +552,27 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       return next;
     });
     setComments([]);
+    setPropagationData(null);
+    setPropagationLoading(false);
     try {
       const caseComments = await getComments(c.id);
       setComments(caseComments || []);
     } catch (error) {
       console.warn('Error loading comments:', error);
       setComments([]);
+    }
+
+    // Fetch propagation data
+    setPropagationLoading(true);
+    setPropagationData(null);
+    try {
+      const propagation = await fetchPropagation(c.flight_number, c.sched_utc);
+      setPropagationData(propagation || []);
+    } catch (error) {
+      console.warn('Error loading propagation:', error);
+      setPropagationData([]);
+    } finally {
+      setPropagationLoading(false);
     }
 
     // Open WebSocket for real-time comments
@@ -663,7 +712,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         risk_level: severityFromDelay(selectedFlight.predictedDelay) === 'major' ? 'high' : 'medium',
         likely_cause: selectedFlight.likelyCause || null,
         tagged_causes: rawTags.length > 0 ? rawTags : (selectedFlight.likelyCause ? [selectedFlight.likelyCause] : []),
-        deadline: deadline || null
+        deadline: deadline || null,
+        movement: selectedFlight.movement || null
       };
 
       const newCase = await createCase(newCaseData);
@@ -680,8 +730,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const airlines = ['All', ...Array.from(new Set(normalizedCases.map(c => c.airline)))];
-  const severities = ['All', 'minor', 'moderate', 'major'];
+  const distinctAirlines = Array.from(new Set(normalizedCases.map(c => c.airline))).filter(a => a !== '—');
+  const hasMultipleAirlines = distinctAirlines.length > 1;
 
   return (
     <PageLayout>
@@ -709,12 +759,25 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
           </div>
           <TopBar>
             <Search placeholder="Search flights or airlines..." value={query} onChange={(e) => setQuery(e.target.value)} />
-            <Select value={filterAirline} onChange={(e) => setFilterAirline(e.target.value)}>
-              {airlines.map(a => <option key={a} value={a}>{a}</option>)}
-            </Select>
-            <Select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)}>
-              {severities.map(s => <option key={s} value={s}>{s === 'All' ? 'All Severities' : s}</option>)}
-            </Select>
+            
+            <ChipGroup>
+              <FilterChip active={activeSeverities.has('major')} severity="major" onClick={() => setActiveSeverities(prev => { const n = new Set(prev); n.has('major') ? n.delete('major') : n.add('major'); return n; })}>🔴 Major</FilterChip>
+              <FilterChip active={activeSeverities.has('moderate')} severity="moderate" onClick={() => setActiveSeverities(prev => { const n = new Set(prev); n.has('moderate') ? n.delete('moderate') : n.add('moderate'); return n; })}>🟡 Moderate</FilterChip>
+              <FilterChip active={activeSeverities.has('minor')} severity="minor" onClick={() => setActiveSeverities(prev => { const n = new Set(prev); n.has('minor') ? n.delete('minor') : n.add('minor'); return n; })}>🟢 Minor</FilterChip>
+            </ChipGroup>
+
+            {hasMultipleAirlines && (
+              <ChipGroup>
+                {distinctAirlines.map(airline => (
+                  <FilterChip key={airline} active={activeAirlines.has(airline)} onClick={() => setActiveAirlines(prev => { const n = new Set(prev); n.has(airline) ? n.delete(airline) : n.add(airline); return n; })}>{airline}</FilterChip>
+                ))}
+              </ChipGroup>
+            )}
+
+            {(activeAirlines.size > 0 || activeSeverities.size > 0) && (
+              <ClearLink onClick={() => { setActiveAirlines(new Set()); setActiveSeverities(new Set()); }}>Clear filters</ClearLink>
+            )}
+
             <ClosedButton onClick={() => setShowClosed(true)}>Closed Cases</ClosedButton>
             <AddButton onClick={openCreateDrawer}>+ Add Case</AddButton>
           </TopBar>
@@ -871,6 +934,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         <DrawerOverlay onClick={() => {
           if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
           setDrawerCase(null);
+          setPropagationData(null);
+          setPropagationLoading(false);
           setDrawerMode('view');
         }} />
       )}
@@ -887,7 +952,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
               <DrawerHeader>
                 <DrawerTitle>{base.flightNo || '—'}</DrawerTitle>
                 <DrawerSubtitle>
-                  {[base.airline, base.route].filter(Boolean).join(' · ')}
+                  {[base.airline, base.route].filter(Boolean).join(' · ')}{base.movement === 'departure' ? ' · 🛫 Departure' : base.movement === 'arrival' ? ' · 🛬 Arrival' : ''}
                 </DrawerSubtitle>
               </DrawerHeader>
 
@@ -924,7 +989,97 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
                 <DrawerSection>
                   <DrawerSectionTitle>Propagation Impact</DrawerSectionTitle>
-                  <div style={{ color:'#666', fontSize:13, lineHeight:1.6 }}>Propagation analysis not available — check Flights table for connected flights.</div>
+                  {propagationLoading && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#666', fontSize: 13 }}>
+                      <div style={{ width: 16, height: 16, border: '2px solid #e1e5e9', borderTop: '2px solid #1A4B8F', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      Loading connected flights...
+                    </div>
+                  )}
+                  {!propagationLoading && (!propagationData || propagationData.length === 0) && (
+                    <div style={{ color: '#999', fontSize: 13 }}>No connected flights detected.</div>
+                  )}
+                  {!propagationLoading && propagationData && propagationData.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {propagationData.map((flight, idx) => {
+                        const severityColor =
+                          flight.severity === 'major' ? '#dc2626' :
+                          flight.severity === 'moderate' ? '#d97706' :
+                          '#16a34a';
+                        const severityBg =
+                          flight.severity === 'major' ? '#fee2e2' :
+                          flight.severity === 'moderate' ? '#fef3c7' :
+                          '#dcfce7';
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              background: '#fff',
+                              border: '1px solid #e1e5e9',
+                              borderRadius: 8,
+                              borderLeft: `3px solid ${severityColor}`,
+                              padding: 12,
+                              marginBottom: 0,
+                            }}
+                          >
+                            <div style={{ fontWeight: 600, color: '#333', marginBottom: 6 }}>
+                              {flight.flightNo}
+                            </div>
+                            <div style={{ color: '#666', fontSize: 12, marginBottom: 6 }}>
+                              {flight.route}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                              <span style={{ fontSize: 12, color: '#666' }}>
+                                {flight.scheduledTime || '—'}
+                              </span>
+                              <span
+                                style={{
+                                  padding: '4px 8px',
+                                  borderRadius: 4,
+                                  background: severityBg,
+                                  color: severityColor,
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {flight.delayValue != null ? `+${flight.delayValue} min` : 'On Time'}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  padding: '3px 8px',
+                                  borderRadius: 999,
+                                  background: '#eef2ff',
+                                  color: '#1A4B8F',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {flight.source || 'Propagated'}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  padding: '3px 8px',
+                                  borderRadius: 999,
+                                  background: '#f1f5f9',
+                                  color: '#1A4B8F',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {flight.status || 'Pending'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <style>{`
+                    @keyframes spin {
+                      to { transform: rotate(360deg); }
+                    }
+                  `}</style>
                 </DrawerSection>
 
                 <DrawerSection>
@@ -998,6 +1153,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                 <StyledDrawerButton onClick={() => {
                   if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
                   setDrawerCase(null);
+                  setPropagationData(null);
+                  setPropagationLoading(false);
                 }}>Close</StyledDrawerButton>
               </DrawerFooter>
             </>
@@ -1023,21 +1180,32 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                   />
                   {flightQuery && (
                     <div style={{ border:'1px solid #eef1f4', borderRadius:8, maxHeight:160, overflow:'auto', background:'#fff' }}>
-                      {liveFlights
-                        .filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase()))
-                        .slice(0, 20)
-                        .map(f => (
-                          <div key={f.flightNo + f.sched_utc} style={{ padding:10, cursor:'pointer', borderBottom:'1px solid #f5f5f5' }}
+                      {(() => {
+                        const matches = liveFlights
+                          .filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase()))
+                          .filter(f => f.status !== 'On Time' && f.status !== 'Early')
+                          .slice(0, 20);
+                        if (matches.length === 0) return (
+                          <div style={{ padding:10, color:'#999', fontSize:13 }}>No flights found</div>
+                        );
+                        return matches.map(f => (
+                          <div key={f.flightNo + f.sched_utc}
+                            style={{ padding:'8px 10px', cursor:'pointer', borderBottom:'1px solid #f5f5f5', display:'flex', flexDirection:'column', gap:2 }}
                             onClick={() => { setSelectedFlight(f); setFlightQuery(f.flightNo); }}>
-                            <span style={{ fontWeight:600 }}>{f.flightNo}</span>
-                            <span style={{ color:'#666', marginLeft:8 }}>{f.airline} · {f.route}</span>
-                            {f.predictedDelay > 0 && <span style={{ color:'#dc2626', marginLeft:8, fontSize:12 }}>+{f.predictedDelay} min</span>}
+                            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                              <span style={{ fontWeight:700, color:'#1A4B8F' }}>{f.flightNo}</span>
+                              <span style={{
+                                fontSize:11, fontWeight:600, padding:'2px 8px', borderRadius:999,
+                                background: f.status === 'Major Delay' ? '#FEE2E2' : f.status === 'Minor Delay' ? '#FEF3C7' : '#f1f5f9',
+                                color:      f.status === 'Major Delay' ? '#991B1B' : f.status === 'Minor Delay' ? '#92400E' : '#475569',
+                              }}>{f.status}</span>
+                            </div>
+                            <div style={{ fontSize:12, color:'#666' }}>
+                              {f.airline} · {f.route} · {f.scheduledTime || '—'}
+                            </div>
                           </div>
-                        ))
-                      }
-                      {liveFlights.filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase())).length === 0 && (
-                        <div style={{ padding:10, color:'#999', fontSize:13 }}>No flights found</div>
-                      )}
+                        ));
+                      })()}
                     </div>
                   )}
                 </div>
@@ -1125,7 +1293,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
             </DrawerContent>
 
             <DrawerFooter>
-              <StyledDrawerButton onClick={() => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } setDrawerCase(null); setDrawerMode('view'); }}>Cancel</StyledDrawerButton>
+              <StyledDrawerButton onClick={() => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } setDrawerCase(null); setPropagationData(null); setPropagationLoading(false); setDrawerMode('view'); }}>Cancel</StyledDrawerButton>
               <StyledDrawerButton primary onClick={saveNewCase} disabled={!selectedFlight}>Save Case</StyledDrawerButton>
             </DrawerFooter>
           </>

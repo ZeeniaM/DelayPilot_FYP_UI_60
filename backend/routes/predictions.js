@@ -72,6 +72,20 @@ router.post('/predict', async (req, res) => {
  * No other changes to predictions.js needed.
  */
 
+// GET /api/predictions/propagation?number_raw=...&sched_utc=...
+router.get('/propagation', async (req, res) => {
+  try {
+    const { data } = await axios.get(`${FASTAPI}/flights/propagation`, {
+      params: req.query,
+      timeout: 10000,
+    });
+    res.json(data);
+  } catch (err) {
+    const status = err.response?.status || 502;
+    res.status(status).json({ error: err.response?.data?.detail || 'Propagation lookup failed' });
+  }
+});
+
 router.post('/simulate', async (req, res) => {
   try {
     const { data } = await axios.post(

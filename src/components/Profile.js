@@ -140,9 +140,9 @@ const LoadingText = styled.div`
   font-size: 14px;
 `;
 
-const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange,
-  notifCount, hasNewNotif, notifOpen, liveAlerts,
-  onNotifClick, onNotifClose
+const Profile = ({ userRole, userName, onLogout, activeTab,
+  onTabChange, notifCount = 0, hasNewNotif = false, notifOpen = false,
+  liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard
 }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -320,6 +320,10 @@ const Profile = ({ userRole, userName, onLogout, activeTab, onTabChange,
         onLogout={onLogout}
         activeTab={activeTab}
         onTabChange={onTabChange}
+        notifCount={notifCount} hasNewNotif={hasNewNotif}
+        notifOpen={notifOpen} liveAlerts={liveAlerts || []}
+        onNotifClick={onNotifClick} onNotifClose={onNotifClose}
+        onAlertDismiss={onAlertDismiss} onAlertAddToBoard={onAlertAddToBoard}
       />
       <Content>
         <Card>

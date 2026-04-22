@@ -160,6 +160,7 @@ const initDatabase = async () => {
         risk_level          VARCHAR(20),
         likely_cause        VARCHAR(50),
         tagged_causes       TEXT[]       NOT NULL DEFAULT '{}',
+        movement            VARCHAR(20),
         status              VARCHAR(30)  NOT NULL DEFAULT 'delayNoted',
         deadline            TIMESTAMPTZ,
         created_by_user_id  INTEGER      REFERENCES users(id) ON DELETE SET NULL,
@@ -191,7 +192,30 @@ const initDatabase = async () => {
         ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1
     `);
 
-    console.log('✅ mitigation_cases table ready');
+    // Add movement column (safe on existing tables)
+    try {
+      const movementColumnCheck = await queryWithRetry(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='mitigation_cases' AND column_name='movement'
+      `);
+      if (movementColumnCheck.rows.length === 0) {
+        await queryWithRetry(`
+          ALTER TABLE mitigation_cases
+            ADD COLUMN movement VARCHAR(20)
+        `);
+        console.log('✅ Added movement column to mitigation_cases table');
+      }
+    } catch (error) {
+      if (
+        !error.message.includes('already exists') &&
+        !error.message.includes('duplicate')
+      ) {
+        console.warn('Warning: Could not add movement column:', error.message);
+      }
+    }
+
+    console.log('✅ Mitigation_cases table ready');
 
     // ─────────────────────────────────────────────────────────────
     // NEW TABLE: case_comments
@@ -228,7 +252,7 @@ const initDatabase = async () => {
         ON case_comments(created_at ASC)
     `);
 
-    console.log('✅ case_comments table ready');
+    console.log('✅ Case_comments table ready');
 
     // ─────────────────────────────────────────────────────────────
     // All tables initialised

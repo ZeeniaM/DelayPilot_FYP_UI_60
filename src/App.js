@@ -24,7 +24,8 @@ function App() {
   const [activeTab,      setActiveTab]      = useState('Dashboard');
   const [notifOpen,      setNotifOpen]      = useState(false);
   const [hasNew,         setHasNew]         = useState(false);
-  const [dashRefreshKey, setDashRefreshKey] = useState(0);
+  const [dashRefreshKey,    setDashRefreshKey]    = useState(0);
+  const [simulationResult,  setSimulationResult]  = useState(null);
 
   // ── Persistent alert store ────────────────────────────────────
   // Map<flightNo → entry> lives in a ref so it is never lost across
@@ -135,20 +136,24 @@ function App() {
     setHasNew(false);
   };
 
+  const handleSimulationResult = (res) => setSimulationResult(res);
+
   const navProps = {
     userRole,
     userName,
-    onLogout:          handleLogout,
+    onLogout:            handleLogout,
     activeTab,
-    onTabChange:       handleTabChange,
-    notifCount:        liveAlerts.length,
-    hasNewNotif:       hasNew,
+    onTabChange:         handleTabChange,
+    notifCount:          liveAlerts.length,
+    hasNewNotif:         hasNew,
     notifOpen,
     liveAlerts,
-    onNotifClick:      handleBellClick,
-    onNotifClose:      () => setNotifOpen(false),
-    onAlertDismiss:    handleAlertDismiss,
-    onAlertAddToBoard: handleAlertAddToBoard,
+    onNotifClick:        handleBellClick,
+    onNotifClose:        () => setNotifOpen(false),
+    onAlertDismiss:      handleAlertDismiss,
+    onAlertAddToBoard:   handleAlertAddToBoard,
+    simulationResult,
+    onSimulationResult:  handleSimulationResult,
   };
 
   const renderActivePage = () => {

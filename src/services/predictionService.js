@@ -509,3 +509,23 @@ export const simulateFlight = async (number_raw, sched_utc, overrides = {}) => {
     return null;
   }
 };
+
+/**
+ * Fetch propagation impact (connected flights) for a given flight.
+ *
+ * @param {string} number_raw - Flight number (e.g. "LH 638")
+ * @param {string} sched_utc  - Scheduled UTC time from pipeline
+ *
+ * @returns {array} connected_flights array, or empty array on error
+ */
+export const fetchPropagation = async (number_raw, sched_utc) => {
+  try {
+    const { data } = await authAxios().get('/predictions/propagation', {
+      params: { number_raw, sched_utc },
+    });
+    return data.connected_flights || [];
+  } catch (err) {
+    console.warn('[predictionService] fetchPropagation failed:', err.message);
+    return [];
+  }
+};

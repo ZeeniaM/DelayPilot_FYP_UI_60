@@ -878,67 +878,116 @@ const LandingPage = ({ onGoToLogin }) => {
                         </div>
                       )}
 
-                      {/* ── ML Model prediction — always shown ── */}
-                      <div style={{
-                        ...S.probRow,
-                        // Tint border green when model agrees with confirmed on-time,
-                        // amber when model flags risk, blue-grey when confirmed overrides
-                        border: hasConfirmed && isOnTime && !modelPredicts
-                          ? '1px solid #c8eedd'
-                          : hasConfirmed && isDelayedConf && modelPredicts
-                            ? '1px solid #f0c070'
-                            : '1px solid #c8d8ee',
-                      }}>
-                        {/* Header row: label + binary verdict chip */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <div style={S.probLabel}>{probSectionLabel}</div>
-                          <span style={{
-                            fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
-                            padding: '2px 8px', borderRadius: 10,
-                            background: modelPredicts ? '#FEF3C7' : '#DCFCE7',
-                            color:      modelPredicts ? '#92400E'  : '#166534',
-                          }}>
-                            {modelPredicts ? '⚠ DELAY LIKELY' : '✓ ON TIME'}
-                          </span>
-                        </div>
+                      {/* ── Primary delay display — 3-tier priority ── */}
+                      {(() => {
+                        // Tier 1: confirmed carrier data
+                        let resolvedDelay, resolvedSource;
+                        if (result.confirmed_delay_min != null) {
+                          resolvedDelay  = Math.round(result.confirmed_delay_min);
+                          resolvedSource = 'confirmed';
+                        } else if (timeDiffMin != null && (timeDiffMin >= 15 || timeDiffMin < 0)) {
+                          resolvedDelay  = timeDiffMin;
+                          resolvedSource = 'fids';
+                        } else if (minutesUi != null && minutesUi >= 5) {
+                          resolvedDelay  = minutesUi;
+                          resolvedSource = 'model';
+                        } else {
+                          resolvedDelay  = 0;
+                          resolvedSource = 'none';
+                        }
 
-                        {/* Probability + risk label */}
-                        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <span style={S.probValue}>{probPct}%</span>
-                          <span style={{ fontSize: 12, color: '#666666' }}>{riskLabel}</span>
-                        </div>
+                        let resolvedStatus;
+                        if (resolvedSource === 'confirmed' || resolvedSource === 'fids') {
+                          if      (resolvedDelay >= 30) resolvedStatus = 'Major Delay';
+                          else if (resolvedDelay >= 5)  resolvedStatus = 'Minor Delay';
+                          else if (resolvedDelay < 0)   resolvedStatus = 'Early';
+                          else                          resolvedStatus = 'On Time';
+                        } else if (resolvedSource === 'model') {
+                          if      (resolvedDelay >= 30) resolvedStatus = 'Major Delay';
+                          else if (resolvedDelay >= 5)  resolvedStatus = 'Minor Delay';
+                          else                          resolvedStatus = 'On Time';
+                        } else {
+                          resolvedStatus = 'On Time';
+                        }
 
-                        {/* Probability bar */}
-                        <div style={S.probBar}>
-                          <div style={{ ...S.probFill(probPct), background: barColor }} />
-                        </div>
+                        if (resolvedSource === 'confirmed' || resolvedSource === 'fids') {
+                          const statusColor = resolvedStatus === 'Major Delay' ? '#dc2626'
+                            : resolvedStatus === 'Minor Delay' ? '#d97706' : '#16a34a';
+                          const statusBg = resolvedStatus === 'Major Delay' ? '#fee2e2'
+                            : resolvedStatus === 'Minor Delay' ? '#fef3c7' : '#dcfce7';
+                          const delayDisplay = resolvedDelay > 0
+                            ? `+${resolvedDelay} min`
+                            : resolvedDelay < 0
+                              ? `Early by ${Math.abs(resolvedDelay)} min`
+                              : 'On Time';
+                          return (
+                            <div style={{ ...S.probRow, background: statusBg, border: `1px solid ${statusColor}60` }}>
+                              <div style={{ fontSize: 11, letterSpacing: 0.8, textTransform: 'uppercase', color: statusColor, fontWeight: 700, marginBottom: 8 }}>
+                                {resolvedStatus}
+                              </div>
+                              <div style={{ fontSize: 30, fontWeight: 700, color: statusColor, fontFamily: "'Cinzel', Georgia, serif", marginBottom: 6, lineHeight: 1 }}>
+                                {delayDisplay}
+                              </div>
+                              <div style={{ fontSize: 12, color: statusColor, opacity: 0.8 }}>
+                                {resolvedSource === 'confirmed' ? 'Confirmed by carrier' : 'Observed from schedule data'}
+                              </div>
+                            </div>
+                          );
+                        }
 
-                        {/* Estimated delay magnitude — always shown, wording varies */}
-                        {minutesUi != null && (
-                          <div style={{
-                            display: 'flex', alignItems: 'center', gap: 6,
-                            marginTop: 8, marginBottom: 4,
-                            fontSize: 12,
-                            color: minutesUi >= 30 ? '#991B1B' : minutesUi >= 5 ? '#92400E' : '#166534',
-                            background: minutesUi >= 30 ? '#FEE2E2' : minutesUi >= 5 ? '#FEF9EE' : '#DCFCE7',
-                            borderRadius: 6, padding: '5px 10px',
-                            border: `1px solid ${minutesUi >= 30 ? '#fca5a5' : minutesUi >= 5 ? '#f5dfa0' : '#86efac'}`,
-                          }}>
-                            <span>⏱</span>
-                            <span>
-                              {minutesUi === 0
-                                ? <><strong>No delay expected</strong> — model estimates on-time departure/arrival</>
-                                : <>Model estimates approx. <strong>+{minutesUi} min</strong> delay</>
-                              }
-                            </span>
+                        if (resolvedSource === 'model') {
+                          return (
+                            <div style={{ ...S.probRow, border: '1px solid #c8d8ee' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                                <div style={S.probLabel}>AI DELAY ESTIMATE</div>
+                                <span style={{
+                                  fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
+                                  padding: '2px 8px', borderRadius: 10,
+                                  background: modelPredicts ? '#FEF3C7' : '#DCFCE7',
+                                  color:      modelPredicts ? '#92400E'  : '#166534',
+                                }}>
+                                  {modelPredicts ? '⚠ DELAY LIKELY' : '✓ ON TIME'}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 8 }}>
+                                <span style={S.probValue}>{probPct}%</span>
+                                <span style={{ fontSize: 12, color: '#666666' }}>{riskLabel}</span>
+                              </div>
+                              <div style={S.probBar}>
+                                <div style={{ ...S.probFill(probPct), background: barColor }} />
+                              </div>
+                              {minutesUi >= 5 && (
+                                <div style={{
+                                  display: 'flex', alignItems: 'center', gap: 6,
+                                  marginTop: 8, marginBottom: 4, fontSize: 12,
+                                  color: minutesUi >= 30 ? '#991B1B' : '#92400E',
+                                  background: minutesUi >= 30 ? '#FEE2E2' : '#FEF9EE',
+                                  borderRadius: 6, padding: '5px 10px',
+                                  border: `1px solid ${minutesUi >= 30 ? '#fca5a5' : '#f5dfa0'}`,
+                                }}>
+                                  <span>⏱</span>
+                                  <span>+{minutesUi} min estimated</span>
+                                </div>
+                              )}
+                              <div style={{ fontSize: 11, color: '#888888', marginTop: 6, lineHeight: 1.5 }}>
+                                No confirmed delay data available yet. Based on weather, congestion and historical patterns.
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // resolvedSource === 'none'
+                        return (
+                          <div style={{ ...S.probRow, background: '#dcfce7', border: '1px solid #86efac' }}>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#16a34a', marginBottom: 6 }}>
+                              ✓ No delay currently predicted
+                            </div>
+                            <div style={{ fontSize: 12, color: '#166534' }}>
+                              This flight appears to be on schedule. No delay signals detected from weather, congestion, or schedule data.
+                            </div>
                           </div>
-                        )}
-
-                        {/* Context footnote */}
-                        <div style={{ fontSize: 11, color: '#888888', marginTop: 6, lineHeight: 1.5 }}>
-                          {riskContext}
-                        </div>
-                      </div>
+                        );
+                      })()}
 
                       {/* ── Likely cause (only when delay is likely or confirmed) ── */}
                       {causeLabel(result.ml_cause) && (isDelayedConf || modelPredicts || probPct >= 25) && (

@@ -34,7 +34,7 @@ router.get('/cases', verifyToken, async (req, res) => {
     const result = await query(
       `SELECT id, flight_number, sched_utc, airline_code, route,
               predicted_delay_min, risk_level, likely_cause, tagged_causes,
-              status, deadline, created_by_user_id, created_at, updated_at,
+              movement, status, deadline, created_by_user_id, created_at, updated_at,
               resolved_at, closed_at
        FROM mitigation_cases
        WHERE status != 'closed'
@@ -66,7 +66,7 @@ router.get('/cases/closed', verifyToken, async (req, res) => {
     const result = await query(
       `SELECT id, flight_number, sched_utc, airline_code, route,
               predicted_delay_min, risk_level, likely_cause, tagged_causes,
-              status, deadline, created_by_user_id, created_at, updated_at,
+              movement, status, deadline, created_by_user_id, created_at, updated_at,
               resolved_at, closed_at
        FROM mitigation_cases
        WHERE status = 'closed'
@@ -116,6 +116,7 @@ router.post('/cases', verifyToken, async (req, res) => {
       risk_level,
       likely_cause,
       tagged_causes = [],
+      movement = null,
       deadline = null
     } = req.body;
 
@@ -134,11 +135,11 @@ router.post('/cases', verifyToken, async (req, res) => {
       `INSERT INTO mitigation_cases (
         flight_number, sched_utc, airline_code, route,
         predicted_delay_min, risk_level, likely_cause, tagged_causes,
-        status, deadline, created_by_user_id, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        movement, status, deadline, created_by_user_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
        RETURNING id, flight_number, sched_utc, airline_code, route,
                  predicted_delay_min, risk_level, likely_cause, tagged_causes,
-                 status, deadline, created_by_user_id, created_at, updated_at`,
+                 movement, status, deadline, created_by_user_id, created_at, updated_at`,
       [
         flight_number,
         sched_utc,
@@ -148,6 +149,7 @@ router.post('/cases', verifyToken, async (req, res) => {
         risk_level || null,
         likely_cause || null,
         tagsArray,
+        movement || null,
         'delayNoted', // default status
         deadline || null,
         req.user.id

@@ -64,6 +64,18 @@ const Dashboard = ({
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
+  useEffect(() => {
+    const weatherInterval = setInterval(async () => {
+      try {
+        const weather = await fetchWeather();
+        if (weather) setLiveWeather(weather);
+      } catch (error) {
+        console.warn('Error auto-refreshing weather:', error);
+      }
+    }, 600000);
+    return () => clearInterval(weatherInterval);
+  }, []);
+
   return (
     <PageLayoutWithBackground>
       <PageContainer>

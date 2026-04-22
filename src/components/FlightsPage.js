@@ -26,7 +26,7 @@ import {
   CauseBreakdown, CauseItem, CauseLabel, CauseBar, CauseFill, CausePercentage,
   DrawerBackdrop, LoadingText, ErrorText, Spinner,
 } from '../styles/components.styles';
-import { fetchFlights } from '../services/predictionService';
+import { fetchFlights, fetchPropagation, formatTime } from '../services/predictionService';
 
 // ── Global style: lock background to solid blue across all interactions ────
 // The background split (blue nav / white body) shifts on drawer open/close
@@ -74,6 +74,9 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
   const [drawerOpen,        setDrawerOpen]        = useState(false);
   const [prediction,        setPrediction]        = useState(null);
   const [predLoading,       setPredLoading]       = useState(false);
+
+  const [propagationData,   setPropagationData]   = useState(null);
+  const [propagationLoading, setPropagationLoading] = useState(false);
 
   // Fetch flights
   const loadFlights = useCallback(async () => {
@@ -124,15 +127,28 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
     });
   }, [flights, searchTerm, statusFilter, movementFilter]);
 
-  // Row click → open drawer with pre-computed data (no extra API call)
+  // Row click → open drawer with pre-computed data and fetch propagation
   const handleFlightClick = (flight) => {
     setSelectedFlight(flight);
     setDrawerOpen(true);
+    setPropagationLoading(true);
+    setPropagationData(null);
+
+    (async () => {
+      try {
+        const result = await fetchPropagation(flight.flightNo, flight.sched_utc);
+        setPropagationData(result);
+      } finally {
+        setPropagationLoading(false);
+      }
+    })();
   };
 
   const handleCloseDrawer = () => {
     setDrawerOpen(false);
     setSelectedFlight(null);
+    setPropagationData(null);
+    setPropagationLoading(false);
   };
 
   const handleAddToMitigation = async () => {
@@ -336,13 +352,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
             // Show cause section when: flight is delayed OR model predicts delay risk
             const showCause = isDelayed || mlDelayed || (hasCauseScores && sortedCauses[0]?.[1] > 20);
 
-            // ── Propagation risk ─────────────────────────────────────────────
-            // Reactionary risk: model predicted a delay AND this is a departure
-            // (arrivals cause reactionary delays in subsequent same-aircraft departures).
-            // We derive a rough estimate from ml_minutes_ui: significant departure delays
-            // cascade to subsequent rotations.
-            const propMinutes = hasML && mlDelayed ? Math.round(f.ml_minutes_ui * 0.6) : 0;
-            const showPropagation = propMinutes >= 5 && f.movement === 'departure';
+
 
             return (
               <>
@@ -431,53 +441,84 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                     {hasML ? (
                       <PredictionBlock>
 
-                        {/* Predicted delay — from the regression model (ml_minutes_ui) */}
-                        <PredictionRow>
-                          <PredictionLabel>Predicted Delay</PredictionLabel>
-                          <PredictionValue style={{
-                            color: mlDelayed ? '#dc2626' : '#16a34a',
-                            fontWeight: 700, fontSize: 15,
-                          }}>
-                            {mlDelayed ? `+${Math.round(f.ml_minutes_ui)} min` : 'On Time'}
-                          </PredictionValue>
-                        </PredictionRow>
+                        {/* Compute combined risk score from p15pct and p30pct */}
+                        {(() => {
+                          const combined_risk = Math.round((p15pct * 0.5) + (p30pct * 0.5));
+                          let riskLabel, riskColor, riskBackground;
 
-                        {/* Context note: explains which priority tier drove the table row */}
-                        {f.delaySource === 'model' && isDelayed && (
-                          <div style={{ fontSize: 11, color: '#1A4B8F', background: '#eff6ff',
-                            borderRadius: 6, padding: '5px 8px', marginBottom: 8 }}>
-                            ↑ This ML prediction is the source of the delay shown in the flights table.
-                            No confirmed Status API data is available yet.
-                          </div>
-                        )}
-                        {f.delaySource === 'model' && !isDelayed && mlDelayed && (
-                          <div style={{ fontSize: 11, color: '#92400e', background: '#fffbeb',
-                            borderRadius: 6, padding: '5px 8px', marginBottom: 8 }}>
-                            ⚠ Model predicts a delay risk. Flight currently shows On Time in the table
-                            (below the 15-min classification threshold).
-                          </div>
-                        )}
+                          if (combined_risk >= 60) {
+                            riskLabel = 'High Risk';
+                            riskColor = '#dc2626';
+                            riskBackground = '#fee2e2';
+                          } else if (combined_risk >= 35) {
+                            riskLabel = 'Moderate Risk';
+                            riskColor = '#92400e';
+                            riskBackground = '#fef9c3';
+                          } else if (combined_risk > 0) {
+                            riskLabel = 'Low Risk';
+                            riskColor = '#166534';
+                            riskBackground = '#dcfce7';
+                          } else {
+                            riskLabel = 'No Delay Risk';
+                            riskColor = '#166534';
+                            riskBackground = '#dcfce7';
+                          }
 
-                        {/* Probability bars only — binary Yes/No rows removed */}
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                            <PredictionLabel>P(delay ≥15 min)</PredictionLabel>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: p15pct >= 50 ? '#dc2626' : '#64748b' }}>
-                              {p15pct}%
-                            </span>
-                          </div>
-                          <ProbBar><ProbFill pct={p15pct} /></ProbBar>
-                        </div>
+                          return (
+                            <>
+                              {/* a) Risk label row */}
+                              <PredictionRow>
+                                <PredictionLabel>Delay Risk</PredictionLabel>
+                                <div style={{
+                                  display: 'inline-block',
+                                  backgroundColor: riskBackground,
+                                  color: riskColor,
+                                  fontWeight: 700,
+                                  fontSize: 12,
+                                  padding: '3px 10px',
+                                  borderRadius: 999,
+                                }}>
+                                  {riskLabel}
+                                </div>
+                              </PredictionRow>
 
-                        <div style={{ marginTop: 10 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                            <PredictionLabel>P(delay ≥30 min)</PredictionLabel>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: p30pct >= 50 ? '#dc2626' : '#64748b' }}>
-                              {p30pct}%
-                            </span>
-                          </div>
-                          <ProbBar><ProbFill pct={p30pct} /></ProbBar>
-                        </div>
+                              {/* b) Combined risk progress bar */}
+                              <div style={{ marginTop: 10 }}>
+                                <ProbBar><ProbFill pct={combined_risk} style={{ backgroundColor: riskColor }} /></ProbBar>
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                                  {combined_risk}% delay probability
+                                </div>
+                              </div>
+
+                              {/* c) Delay prediction sentence */}
+                              <div style={{
+                                fontSize: 13,
+                                color: mlDelayed ? riskColor : '#64748b',
+                                fontWeight: mlDelayed ? 600 : 400,
+                                marginTop: 10,
+                              }}>
+                                {mlDelayed
+                                  ? `System estimates approximately ${Math.round(f.ml_minutes_ui)} min delay for this flight.`
+                                  : 'No significant delay currently predicted for this flight.'}
+                              </div>
+
+                              {/* d) Source attribution note when model drives the table row */}
+                              {f.delaySource === 'model' && isDelayed && (
+                                <div style={{ fontSize: 11, color: '#1A4B8F', background: '#eff6ff',
+                                  borderRadius: 6, padding: '5px 8px', marginTop: 8 }}>
+                                  This estimate is the basis for the delay shown in the flights table.
+                                </div>
+                              )}
+                              {f.delaySource === 'model' && !isDelayed && mlDelayed && (
+                                <div style={{ fontSize: 11, color: '#92400e', background: '#fffbeb',
+                                  borderRadius: 6, padding: '5px 8px', marginTop: 8 }}>
+                                  ⚠ Model predicts a delay risk. Flight currently shows On Time in the table
+                                  (below the 15-min classification threshold).
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
 
                       </PredictionBlock>
                     ) : (
@@ -536,36 +577,123 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                     )}
                   </DrawerSection>
 
-                  {/* ══ Section 4: Propagation Impact (departures only) ══════════ */}
-                  {showPropagation && (
-                    <DrawerSection>
-                      <DrawerSectionTitle>Propagation Impact</DrawerSectionTitle>
-                      <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
-                        <div style={{
-                          display: 'flex', alignItems: 'center', gap: 8,
-                          background: propMinutes >= 25 ? '#fee2e2' : propMinutes >= 12 ? '#fef9c3' : '#f0fdf4',
-                          borderRadius: 8, padding: '8px 12px', marginBottom: 10,
-                        }}>
-                          <span style={{ fontSize: 18 }}>
-                            {propMinutes >= 25 ? '🔴' : propMinutes >= 12 ? '🟡' : '🟢'}
-                          </span>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 13,
-                              color: propMinutes >= 25 ? '#dc2626' : propMinutes >= 12 ? '#92400e' : '#166534' }}>
-                              {propMinutes >= 25 ? 'High' : propMinutes >= 12 ? 'Moderate' : 'Low'} reactionary risk
-                            </div>
-                            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                              Next rotation may absorb ~{propMinutes} min of this delay
-                            </div>
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                          Estimated as 60% of predicted departure delay. Actual impact depends
-                          on turnaround buffer and aircraft rotation schedule.
-                        </div>
+                  {/* ══ Section 4: Propagation Impact ════════════════════════════ */}
+                  <DrawerSection>
+                    <DrawerSectionTitle>Propagation Impact</DrawerSectionTitle>
+                    {propagationLoading ? (
+                      <div style={{ fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>
+                        Checking connected rotations...
                       </div>
-                    </DrawerSection>
-                  )}
+                    ) : !propagationData || propagationData.length === 0 ? (
+                      <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                        No connected rotations detected in current FIDS window.
+                      </div>
+                    ) : (
+                      <>
+                        {propagationData.map((item, idx) => {
+                          // Determine border color based on delay status
+                          const borderColor = item.delay_status === 'Major Delay' ? '#dc2626'
+                            : item.delay_status === 'Minor Delay' ? '#f59e0b' : '#166534';
+
+                          // Determine source label and styling
+                          let sourceLabel, sourceBg, sourceFg;
+                          if (item.delay_source === 'confirmed') {
+                            sourceLabel = '✓ Confirmed delay';
+                            sourceBg = '#dcfce7';
+                            sourceFg = '#166534';
+                          } else if (item.delay_source === 'fids') {
+                            sourceLabel = 'FIDS observed';
+                            sourceBg = '#dbeafe';
+                            sourceFg = '#1e40af';
+                          } else if (item.delay_source === 'model') {
+                            sourceLabel = 'ML direct prediction';
+                            sourceBg = '#ede9fe';
+                            sourceFg = '#6d28d9';
+                          } else if (item.delay_source === 'model_propagation') {
+                            sourceLabel = 'Propagation estimate';
+                            sourceBg = '#fef9c3';
+                            sourceFg = '#92400e';
+                          } else {
+                            sourceLabel = 'No data';
+                            sourceBg = '#f3f4f6';
+                            sourceFg = '#6b7280';
+                          }
+
+                          // Determine delay value color
+                          let delayColor;
+                          if (item.resolved_delay_min == null) {
+                            delayColor = '#94a3b8';
+                          } else if (item.resolved_delay_min >= 30) {
+                            delayColor = '#dc2626';
+                          } else if (item.resolved_delay_min >= 5) {
+                            delayColor = '#f59e0b';
+                          } else if (item.resolved_delay_min < 0) {
+                            delayColor = '#16a34a';
+                          } else {
+                            delayColor = '#94a3b8';
+                          }
+
+                          return (
+                            <div key={idx} style={{
+                              background: 'white',
+                              border: '1px solid #e8eef8',
+                              borderLeft: `3px solid ${borderColor}`,
+                              borderRadius: 8,
+                              padding: 12,
+                              marginBottom: 8,
+                            }}>
+                              {/* Top row: flight number and status pill */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                                <div style={{ fontWeight: 700, fontSize: 13, color: '#1A4B8F' }}>
+                                  {item.number_raw}
+                                </div>
+                                <StatusPill status={item.delay_status}>{item.delay_status}</StatusPill>
+                              </div>
+
+                              {/* Route */}
+                              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>
+                                {item.route}
+                              </div>
+
+                              {/* Scheduled time and delay */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                                  Sched: {formatTime(item.sched_utc)}
+                                </div>
+                                <div style={{ fontWeight: 600, fontSize: 13, color: delayColor }}>
+                                  {item.resolved_delay_min != null
+                                    ? `+${Math.round(item.resolved_delay_min)} min`
+                                    : '—'}
+                                </div>
+                              </div>
+
+                              {/* Source label */}
+                              <div style={{ marginTop: 6 }}>
+                                <span style={{
+                                  display: 'inline-block',
+                                  backgroundColor: sourceBg,
+                                  color: sourceFg,
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  padding: '2px 8px',
+                                  borderRadius: 999,
+                                }}>
+                                  {sourceLabel}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Footnote if any item is propagated */}
+                        {propagationData.some(item => item.is_propagated) && (
+                          <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
+                            Propagation estimates use 60% absorption of the source flight's predicted delay.
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </DrawerSection>
 
                 </DrawerContent>
 
@@ -573,7 +701,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                   <DrawerButton
                     primary
                     onClick={handleAddToMitigation}
-                    disabled={f.status === 'On Time' || f.status === 'Landed'}
+                    disabled={f.status === 'On Time' || f.status === 'Landed' || f.status === 'Early'}
                   >
                     Add to Mitigation Board
                   </DrawerButton>
