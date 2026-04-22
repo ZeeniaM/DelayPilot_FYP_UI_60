@@ -15,12 +15,14 @@ const router = express.Router();
 // ─────────────────────────────────────────────────────────────
 const parseCaseRow = (row) => {
   if (!row) return null;
-  return {
-    ...row,
-    tagged_causes: Array.isArray(row.tagged_causes)
-      ? row.tagged_causes
-      : (row.tagged_causes || '').split(',').filter(Boolean)
-  };
+  let tagged = row.tagged_causes;
+  if (!Array.isArray(tagged)) {
+    const str = (tagged || '').trim();
+    tagged = str.startsWith('{')
+      ? str.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean)
+      : str.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return { ...row, tagged_causes: tagged };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -178,7 +180,7 @@ router.post('/cases', verifyToken, async (req, res) => {
 router.patch('/cases/:id/status', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, version } = req.body;
 
     const validStatuses = ['delayNoted', 'inProgress', 'verified', 'resolved', 'closed'];
 
@@ -190,7 +192,7 @@ router.patch('/cases/:id/status', verifyToken, async (req, res) => {
     }
 
     // Determine what timestamp fields to update based on new status
-    let updateFields = 'status = $1, updated_at = NOW()';
+    let updateFields = 'status = $1, version = version + 1, updated_at = NOW()';
     let updateParams = [status];
 
     if (status === 'resolved') {
@@ -199,22 +201,37 @@ router.patch('/cases/:id/status', verifyToken, async (req, res) => {
       updateFields += ', closed_at = NOW()';
     }
 
+    // Build WHERE clause — include version check only when client provides a version
+    const hasVersion = version !== undefined && version !== null;
+    const whereClause = hasVersion
+      ? `id = $${updateParams.length + 1} AND version = $${updateParams.length + 2}`
+      : `id = $${updateParams.length + 1}`;
+    const queryParams = hasVersion ? [...updateParams, id, version] : [...updateParams, id];
+
     const result = await query(
       `UPDATE mitigation_cases
        SET ${updateFields}
-       WHERE id = $${updateParams.length + 1}
+       WHERE ${whereClause}
        RETURNING id, flight_number, sched_utc, airline_code, route,
                  predicted_delay_min, risk_level, likely_cause, tagged_causes,
-                 status, deadline, created_by_user_id, created_at, updated_at,
+                 status, version, deadline, created_by_user_id, created_at, updated_at,
                  resolved_at, closed_at`,
-      [...updateParams, id]
+      queryParams
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Case not found'
-      });
+      if (hasVersion) {
+        // Distinguish 404 from version conflict
+        const check = await query('SELECT id FROM mitigation_cases WHERE id = $1', [id]);
+        if (check.rows.length === 0) {
+          return res.status(404).json({ success: false, message: 'Case not found' });
+        }
+        return res.status(409).json({
+          success: false,
+          message: 'Case was modified by another user. Please refresh and try again.'
+        });
+      }
+      return res.status(404).json({ success: false, message: 'Case not found' });
     }
 
     const updatedCase = parseCaseRow(result.rows[0]);
@@ -248,7 +265,8 @@ router.patch('/cases/:id', verifyToken, async (req, res) => {
       risk_level,
       likely_cause,
       route,
-      airline_code
+      airline_code,
+      version
     } = req.body;
 
     // Build dynamic update fields
@@ -302,20 +320,37 @@ router.patch('/cases/:id', verifyToken, async (req, res) => {
       });
     }
 
-    params.push(id);
+    // Always increment version for optimistic locking
+    updates.push(`version = version + 1`);
+
+    const hasVersion = version !== undefined && version !== null;
+    const whereClause = hasVersion
+      ? `id = $${paramIndex} AND version = $${paramIndex + 1}`
+      : `id = $${paramIndex}`;
+    const allParams = hasVersion ? [...params, id, version] : [...params, id];
 
     const result = await query(
       `UPDATE mitigation_cases
        SET ${updates.join(', ')}
-       WHERE id = $${paramIndex}
+       WHERE ${whereClause}
        RETURNING id, flight_number, sched_utc, airline_code, route,
                  predicted_delay_min, risk_level, likely_cause, tagged_causes,
-                 status, deadline, created_by_user_id, created_at, updated_at,
+                 status, version, deadline, created_by_user_id, created_at, updated_at,
                  resolved_at, closed_at`,
-      params
+      allParams
     );
 
     if (result.rows.length === 0) {
+      if (hasVersion) {
+        const check = await query('SELECT id FROM mitigation_cases WHERE id = $1', [id]);
+        if (check.rows.length === 0) {
+          return res.status(404).json({ success: false, message: 'Case not found' });
+        }
+        return res.status(409).json({
+          success: false,
+          message: 'Case was modified by another user. Please refresh and try again.'
+        });
+      }
       return res.status(404).json({
         success: false,
         message: 'Case not found'
@@ -347,23 +382,36 @@ router.patch('/cases/:id', verifyToken, async (req, res) => {
 router.delete('/cases/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
+    const { version } = req.body;
+
+    const hasVersion = version !== undefined && version !== null;
+    const whereClause = hasVersion ? `id = $1 AND version = $2` : `id = $1`;
+    const queryParams = hasVersion ? [id, version] : [id];
 
     const result = await query(
       `UPDATE mitigation_cases
-       SET status = 'closed', closed_at = NOW(), updated_at = NOW()
-       WHERE id = $1
+       SET status = 'closed', closed_at = NOW(), updated_at = NOW(),
+           version = version + 1
+       WHERE ${whereClause}
        RETURNING id, flight_number, sched_utc, airline_code, route,
                  predicted_delay_min, risk_level, likely_cause, tagged_causes,
-                 status, deadline, created_by_user_id, created_at, updated_at,
+                 status, version, deadline, created_by_user_id, created_at, updated_at,
                  resolved_at, closed_at`,
-      [id]
+      queryParams
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Case not found'
-      });
+      if (hasVersion) {
+        const check = await query('SELECT id FROM mitigation_cases WHERE id = $1', [id]);
+        if (check.rows.length === 0) {
+          return res.status(404).json({ success: false, message: 'Case not found' });
+        }
+        return res.status(409).json({
+          success: false,
+          message: 'Case was modified by another user. Please refresh and try again.'
+        });
+      }
+      return res.status(404).json({ success: false, message: 'Case not found' });
     }
 
     const closedCase = parseCaseRow(result.rows[0]);
@@ -378,6 +426,45 @@ router.delete('/cases/:id', verifyToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to close case',
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// DELETE /api/mitigation/cases/:id/permanent
+// Hard-delete a CLOSED case from the audit log (Admin only)
+// Only allowed when status = 'closed' to prevent accidental loss
+// ─────────────────────────────────────────────────────────────
+router.delete('/cases/:id/permanent', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Only allow deleting already-closed cases
+    const check = await query(
+      `SELECT id, status FROM mitigation_cases WHERE id = $1`,
+      [id]
+    );
+
+    if (check.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Case not found' });
+    }
+
+    if (check.rows[0].status !== 'closed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only closed cases can be permanently deleted'
+      });
+    }
+
+    await query(`DELETE FROM mitigation_cases WHERE id = $1`, [id]);
+
+    res.json({ success: true, message: 'Case permanently deleted' });
+  } catch (error) {
+    console.error('Error permanently deleting case:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to permanently delete case',
       error: error.message
     });
   }
@@ -468,6 +555,10 @@ router.post('/cases/:id/comments', verifyToken, async (req, res) => {
     );
 
     const newComment = result.rows[0];
+
+    // Broadcast to all WebSocket clients viewing this case
+    const broadcast = req.app.locals.broadcastComment;
+    if (broadcast) broadcast(parseInt(id), newComment);
 
     res.status(201).json({
       success: true,

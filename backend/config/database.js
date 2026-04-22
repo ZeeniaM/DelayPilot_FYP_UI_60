@@ -185,6 +185,12 @@ const initDatabase = async () => {
         ON mitigation_cases(created_at DESC)
     `);
 
+    // Add version column for optimistic locking (safe on existing tables)
+    await queryWithRetry(`
+      ALTER TABLE mitigation_cases
+        ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1
+    `);
+
     console.log('✅ mitigation_cases table ready');
 
     // ─────────────────────────────────────────────────────────────

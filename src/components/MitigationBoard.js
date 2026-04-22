@@ -1,8 +1,19 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  GlobalFonts,
+  DetailDrawer, DrawerHeader, DrawerTitle, DrawerSubtitle,
+  DrawerContent, DrawerSection, DrawerSectionTitle,
+  DrawerFooter, DrawerButton as StyledDrawerButton,
+  PredictionBlock, PredictionRow, PredictionLabel, PredictionValue,
+} from '../styles/components.styles';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
-import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, getComments, addComment } from '../services/mitigationService';
+import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, permanentDeleteCase, getComments, addComment } from '../services/mitigationService';
+import { fetchFlights } from '../services/predictionService';
+import API_BASE_URL from '../config/api';
+
+const WS_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api$/, '');
 
 const PageContainer = styled.div`
   min-height: 100vh;
@@ -237,29 +248,12 @@ const Button = styled.button`
   ${p => p.primary ? 'background:#1A4B8F;color:#fff;' : 'background:#f1f3f4;color:#333;'}
 `;
 
-const Drawer = styled.div`
+const DrawerOverlay = styled.div`
   position: fixed;
-  top: 64px;
-  right: ${p => p.open ? '0' : '-420px'};
-  width: 420px;
-  height: calc(100vh - 64px);
-  background: #fff;
-  border-left: 1px solid rgba(0,0,0,0.06);
-  box-shadow: -6px 0 24px rgba(0,0,0,0.08);
-  transition: right 0.25s ease;
-  z-index: 999;
-  display: flex;
-  flex-direction: column;
-`;
-
-const DrawerBody = styled.div`
-  padding: 20px;
-  overflow: auto;
-  flex: 1;
-`;
-
-const DrawerSection = styled.div`
-  margin-bottom: 16px;
+  inset: 0;
+  z-index: 998;
+  background: transparent;
+  cursor: default;
 `;
 
 const CauseButton = styled.button`
@@ -281,17 +275,6 @@ const Pill = styled.span`
   font-weight: 700;
 `;
 
-const initialCases = []; // Will be populated from API
-
-// Mock flights list for selector (subset representative of system flights)
-const flightsCatalog = [
-  { flightNo: 'LH4421', airline: 'Lufthansa', route: 'MUC → FRA', scheduledTime: '14:30', predictedDelay: 2, delayDuration: '2 min', likelyCause: 'Weather', status: 'On-Time' },
-  { flightNo: 'AF1825', airline: 'Air France', route: 'CDG → MUC', scheduledTime: '15:45', predictedDelay: 15, delayDuration: '15 min', likelyCause: 'Congestion', status: 'Minor Delay' },
-  { flightNo: 'BA952', airline: 'British Airways', route: 'LHR → MUC', scheduledTime: '16:20', predictedDelay: 42, delayDuration: '42 min', likelyCause: 'Reactionary', status: 'Major Delay' },
-  { flightNo: 'KL1856', airline: 'KLM Royal Dutch', route: 'AMS → MUC', scheduledTime: '17:10', predictedDelay: 0, delayDuration: 'On Time', likelyCause: 'Weather', status: 'On-Time' },
-  { flightNo: 'EW7823', airline: 'Eurowings', route: 'VIE → MUC', scheduledTime: '17:35', predictedDelay: 12, delayDuration: '12 min', likelyCause: 'Congestion', status: 'Minor Delay' },
-  { flightNo: 'SN789', airline: 'Brussels Airlines', route: 'BRU → MUC', scheduledTime: '19:15', predictedDelay: 75, delayDuration: '75 min', likelyCause: 'Reactionary', status: 'Major Delay' },
-];
 
 const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
@@ -317,25 +300,32 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [closedCases, setClosedCases] = useState([]);
   const [showClosed, setShowClosed] = useState(false);
   const [cardNotifications, setCardNotifications] = useState(new Set());
+  const [pendingClose, setPendingClose] = useState(null);   // case object awaiting close confirm
+  const [duplicateWarning, setDuplicateWarning] = useState(null); // { flightNo, colName }
+  const [liveFlights, setLiveFlights] = useState([]);
+  const wsRef = useRef(null);
 
-  // Load cases from API on mount
+  const loadBoard = async () => {
+    setLoading(true);
+    try {
+      const [activeCasesResp, closedCasesResp] = await Promise.all([
+        getCases().catch(() => ({ cases: [] })),
+        getClosedCases().catch(() => ({ cases: [] }))
+      ]);
+      setCases(activeCasesResp.cases || []);
+      setClosedCases(closedCasesResp.cases || []);
+    } catch (error) {
+      console.error('Error loading mitigation board:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load cases and live flights on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const loadBoard = async () => {
-      setLoading(true);
-      try {
-        const [activeCasesResp, closedCasesResp] = await Promise.all([
-          getCases().catch(() => ({ cases: [] })),
-          getClosedCases().catch(() => ({ cases: [] }))
-        ]);
-        setCases(activeCasesResp.cases || []);
-        setClosedCases(closedCasesResp.cases || []);
-      } catch (error) {
-        console.error('Error loading mitigation board:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
     loadBoard();
+    fetchFlights().then(flights => { if (flights) setLiveFlights(flights); }).catch(() => {});
   }, []);
 
   const handleCreateTagEnter = (e) => {
@@ -347,13 +337,11 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const handleViewTagEnter = (e, base) => {
+  const handleViewTagEnter = async (e) => {
     if (e.key === 'Enter') {
       const val = (e.target.value || '').trim();
       if (!val) return;
-      setCases(prev => prev.map(c => c.id === base.id ? { ...c, tags: [...new Set([...(c.tags || []), val])] } : c));
-      // Add notification for tag update
-      setCardNotifications(prev => new Set(prev).add(base.id));
+      await toggleViewTag(val);
       e.target.value = '';
     }
   };
@@ -378,18 +366,42 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     'closed': 'closed'
   };
 
+  const severityFromDelay = (min) => {
+    if (min >= 30) return 'major';
+    if (min >= 12) return 'moderate';
+    return 'minor';
+  };
+
+  const escalatedSeverity = (base, tagCount) => {
+    const levels = ['minor', 'moderate', 'major'];
+    const idx = levels.indexOf(base);
+    const bump = tagCount >= 3 ? 2 : tagCount >= 2 ? 1 : 0;
+    return levels[Math.min((idx < 0 ? 0 : idx) + bump, 2)];
+  };
+
   // Normalize cases from API to UI format
-  const normalizedCases = cases.map(c => ({
-    ...c,
-    column: statusToColumn[c.status] || 'identified',
-    severity: c.risk_level === 'high' ? 'major' : c.risk_level === 'medium' ? 'moderate' : 'minor',
-    cause: c.likely_cause || 'Unknown',
-    route: c.route || '—',
-    delayMin: c.predicted_delay_min || 0,
-    flightNo: c.flight_number,
-    airline: c.airline_code || '—',
-    unseen: false // API doesn't track this, assume not unseen
-  }));
+  const normalizedCases = cases.map(c => {
+    const taggedArr = Array.isArray(c.tagged_causes) ? c.tagged_causes : [];
+    const baseSev = severityFromDelay(c.predicted_delay_min || 0);
+    const displaySeverity = escalatedSeverity(baseSev, taggedArr.length);
+    const cardCauses = [];
+    if (c.likely_cause) cardCauses.push(c.likely_cause);
+    for (const t of taggedArr) {
+      if (!cardCauses.includes(t)) cardCauses.push(t);
+    }
+    return {
+      ...c,
+      column: statusToColumn[c.status] || 'identified',
+      severity: displaySeverity,
+      cause: c.likely_cause || 'Unknown',
+      route: c.route || '—',
+      delayMin: c.predicted_delay_min || 0,
+      flightNo: c.flight_number,
+      airline: c.airline_code || '—',
+      cardCauses,
+      unseen: false
+    };
+  });
 
   const filtered = useMemo(() => {
     return normalizedCases.filter(c =>
@@ -405,6 +417,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     { key: 'verified', title: 'Verified' },
     { key: 'resolved', title: 'Resolved' },
   ];
+  const columnOrder = ['identified', 'inprogress', 'verified', 'resolved'];
 
   const onDragStart = (e, id) => {
     if (!canEdit) return;
@@ -420,7 +433,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     if (!canEdit) return;
     e.preventDefault();
     if (!dragging) return;
-    const card = cases.find(c => c.id === dragging);
+    const card = normalizedCases.find(c => c.id === dragging);
     if (!card || card.column === colKey) { setDragging(null); return; }
     setPendingMove({ id: dragging, from: card.column, to: colKey });
     setDragging(null);
@@ -428,47 +441,83 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
   const confirmMove = async () => {
     if (!pendingMove) return;
+    const statusMap = {
+      'identified': 'delayNoted',
+      'inprogress': 'inProgress',
+      'verified': 'verified',
+      'resolved': 'resolved'
+    };
     try {
-      // Convert column key to status (identified→delayNoted, inprogress→inProgress, etc.)
-      const statusMap = {
-        'identified': 'delayNoted',
-        'inprogress': 'inProgress',
-        'verified': 'verified',
-        'resolved': 'resolved'
-      };
-      await updateCaseStatus(pendingMove.id, statusMap[pendingMove.to] || pendingMove.to);
-      setCases(prev => prev.map(c => c.id === pendingMove.id ? { ...c, column: pendingMove.to } : c));
+      const newDbStatus = statusMap[pendingMove.to] || pendingMove.to;
+      const currentCase = cases.find(c => c.id === pendingMove.id);
+      const updatedCase = await updateCaseStatus(pendingMove.id, newDbStatus, currentCase?.version);
+      setCases(prev => prev.map(c => c.id === pendingMove.id
+        ? { ...c, status: newDbStatus, version: updatedCase?.version ?? c.version }
+        : c));
       setCardNotifications(prev => new Set(prev).add(pendingMove.id));
     } catch (error) {
-      console.error('Error updating case status:', error);
-      alert('Failed to move case. Please try again.');
+      if (error.response?.status === 409) {
+        alert('This case was updated by another user. The board will refresh with the latest data.');
+        await loadBoard();
+      } else {
+        console.error('Error updating case status:', error);
+        alert('Failed to move case. Please try again.');
+      }
     }
     setPendingMove(null);
   };
   const cancelMove = () => setPendingMove(null);
 
-  const handleCloseCase = async (c) => {
+  const handleCloseCase = (c) => {
     if (!canEdit) return;
+    setPendingClose(c);
+  };
+
+  const confirmClose = async () => {
+    if (!pendingClose) return;
     try {
-      await closeCase(c.id);
-      setClosedCases(prev => [{ ...c, closed_at: new Date().toISOString() }, ...prev]);
-      setCases(prev => prev.filter(x => x.id !== c.id));
+      const currentCase = cases.find(c => c.id === pendingClose.id);
+      const closedCase = await closeCase(pendingClose.id, currentCase?.version);
+      setClosedCases(prev => [{ ...pendingClose, closed_at: new Date().toISOString() }, ...prev]);
+      setCases(prev => prev.filter(x => x.id !== pendingClose.id));
     } catch (error) {
-      console.error('Error closing case:', error);
-      alert('Failed to close case. Please try again.');
+      if (error.response?.status === 409) {
+        alert('This case was modified by another user. The board will refresh with the latest data.');
+        await loadBoard();
+      } else {
+        console.error('Error closing case:', error);
+        alert('Failed to close case. Please try again.');
+      }
+    }
+    setPendingClose(null);
+  };
+
+  const permanentDeleteHandler = async (cc) => {
+    try {
+      await permanentDeleteCase(cc.id);
+      setClosedCases(prev => prev.filter(x => x.id !== cc.id));
+    } catch (error) {
+      console.error('Error permanently deleting case:', error);
+      alert('Failed to delete case. Please try again.');
     }
   };
 
   const openCase = async (c) => {
     setDrawerMode('view');
-    setDrawerCase({ ...c, tags: new Set((c.tagged_causes || [])) });
+    const rawCauses = c.tagged_causes;
+    const causesArray = Array.isArray(rawCauses)
+      ? rawCauses
+      : typeof rawCauses === 'string' && rawCauses.startsWith('{')
+        ? rawCauses.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean)
+        : (rawCauses ? [rawCauses] : []);
+    setDrawerCase({ ...c, tags: new Set(causesArray), tagged_causes: causesArray });
     setCases(prev => prev.map(x => x.id === c.id ? { ...x, unseen: false } : x));
     setCardNotifications(prev => {
       const next = new Set(prev);
       next.delete(c.id);
       return next;
     });
-    // Load comments for this case
+    setComments([]);
     try {
       const caseComments = await getComments(c.id);
       setComments(caseComments || []);
@@ -476,32 +525,87 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       console.warn('Error loading comments:', error);
       setComments([]);
     }
+
+    // Open WebSocket for real-time comments
+    if (wsRef.current) wsRef.current.close();
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      const token = localStorage.getItem('token');
+      ws.send(JSON.stringify({ type: 'auth', token }));
+      ws.send(JSON.stringify({ type: 'join', caseId: c.id }));
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'comment') {
+          setComments(prev =>
+            prev.some(x => x.id === msg.comment.id) ? prev : [...prev, msg.comment]
+          );
+        }
+      } catch {}
+    };
+    ws.onerror = (err) => console.warn('WebSocket error:', err);
   };
 
-  const toggleTag = (name) => {
-    setDrawerCase(prev => {
-      if (!prev) return prev;
-      const nextTags = new Set(prev.tags);
-      if (nextTags.has(name)) nextTags.delete(name); else nextTags.add(name);
-      return { ...prev, tags: nextTags };
-    });
-  };
-
-  const saveTags = async () => {
-    if (!drawerCase) return;
+  const toggleViewTag = async (name) => {
+    if (!drawerCase || (!canEdit && !canReassign)) return;
+    const currentTags = drawerCase.tags instanceof Set ? drawerCase.tags : new Set();
+    const nextTags = new Set(currentTags);
+    if (nextTags.has(name)) nextTags.delete(name); else nextTags.add(name);
+    const tagsArray = Array.from(nextTags);
+    // Optimistic update
+    setDrawerCase(prev => ({ ...prev, tags: nextTags, tagged_causes: tagsArray }));
+    setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: tagsArray } : c));
+    setCardNotifications(prev => new Set(prev).add(drawerCase.id));
     try {
-      const tagsArray = Array.from(drawerCase.tags || []);
-      await updateCase(drawerCase.id, { tagged_causes: tagsArray });
-      setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: tagsArray } : c));
-      setCardNotifications(prev => new Set(prev).add(drawerCase.id));
+      const updatedCase = await updateCase(drawerCase.id, { tagged_causes: tagsArray, version: drawerCase.version });
+      if (updatedCase?.version) {
+        setDrawerCase(prev => prev ? { ...prev, version: updatedCase.version } : prev);
+        setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, version: updatedCase.version } : c));
+      }
     } catch (error) {
-      console.error('Error saving tags:', error);
-      alert('Failed to save tags. Please try again.');
+      if (error.response?.status === 409) {
+        alert('This case was modified by another user. The board will refresh with the latest data.');
+        setDrawerCase(prev => prev ? { ...prev, tags: currentTags, tagged_causes: Array.from(currentTags) } : prev);
+        setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: Array.from(currentTags) } : c));
+        await loadBoard();
+      } else {
+        console.error('Error saving tag:', error);
+      }
+    }
+  };
+
+  const removeViewTag = async (name) => {
+    if (!drawerCase) return;
+    const currentTags = drawerCase.tags instanceof Set ? drawerCase.tags : new Set();
+    const nextTags = new Set([...currentTags].filter(t => t !== name));
+    const tagsArray = Array.from(nextTags);
+    // Optimistic update
+    setDrawerCase(prev => ({ ...prev, tags: nextTags, tagged_causes: tagsArray }));
+    setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: tagsArray } : c));
+    setCardNotifications(prev => new Set(prev).add(drawerCase.id));
+    try {
+      const updatedCase = await updateCase(drawerCase.id, { tagged_causes: tagsArray, version: drawerCase.version });
+      if (updatedCase?.version) {
+        setDrawerCase(prev => prev ? { ...prev, version: updatedCase.version } : prev);
+        setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, version: updatedCase.version } : c));
+      }
+    } catch (error) {
+      if (error.response?.status === 409) {
+        alert('This case was modified by another user. The board will refresh with the latest data.');
+        setDrawerCase(prev => prev ? { ...prev, tags: currentTags, tagged_causes: Array.from(currentTags) } : prev);
+        setCases(prev => prev.map(c => c.id === drawerCase.id ? { ...c, tagged_causes: Array.from(currentTags) } : c));
+        await loadBoard();
+      } else {
+        console.error('Error removing tag:', error);
+      }
     }
   };
 
   const openCreateDrawer = () => {
     if (!canEdit) return;
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     setDrawerMode('create');
     setSelectedFlight(null);
     setFlightQuery('');
@@ -524,7 +628,9 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     if (!text || !drawerCase) return;
     try {
       const newComment = await addComment(drawerCase.id, text, userName);
-      setComments(prev => [...prev, newComment]);
+      setComments(prev =>
+        prev.some(x => x.id === newComment.id) ? prev : [...prev, newComment]
+      );
       if (drawerCase && drawerMode === 'view') {
         setCardNotifications(prev => new Set(prev).add(drawerCase.id));
       }
@@ -534,14 +640,16 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const severityFromDelay = (min) => {
-    if (min >= 30) return 'major';
-    if (min >= 12) return 'moderate';
-    return 'minor';
-  };
 
   const saveNewCase = async () => {
     if (!selectedFlight) return;
+    // Prevent duplicate: check if a case for this flight already exists in any active column
+    const duplicate = cases.find(c => c.flight_number === selectedFlight.flightNo);
+    if (duplicate) {
+      const colName = columns.find(col => col.key === (statusToColumn[duplicate.status] || 'identified'))?.title || duplicate.status;
+      setDuplicateWarning({ flightNo: selectedFlight.flightNo, colName });
+      return;
+    }
     try {
       const rawTags = Array.from(createTags);
       const primaryCause = rawTags[0] || (selectedFlight.likelyCause || 'Other');
@@ -549,7 +657,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       const newCaseData = {
         flight_number: selectedFlight.flightNo,
         sched_utc: selectedFlight.sched_utc || new Date().toISOString(),
-        airline_code: selectedFlight.airline?.substring(0, 2) || null,
+        airline_code: selectedFlight.airlineCode || selectedFlight.airline?.substring(0, 2) || null,
         route: selectedFlight.route,
         predicted_delay_min: selectedFlight.predictedDelay || 0,
         risk_level: severityFromDelay(selectedFlight.predictedDelay) === 'major' ? 'high' : 'medium',
@@ -572,45 +680,13 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const getCauseBreakdown = (flight) => {
-    if (!flight) return [];
-    // Normalize to only Weather, Congestion, Reactionary (merge ATC->Congestion, Ground Ops->Reactionary)
-    if (flight.flightNo === 'BA952') {
-      // Original: Ground Ops 62, Congestion 25, ATC 13 → Reactionary 62, Congestion 38
-      return [
-        { label: 'Reactionary', pct: 62 },
-        { label: 'Congestion', pct: 38 },
-      ];
-    }
-    if (flight.flightNo === 'AF1825') {
-      // Original: ATC 70, Weather 30 → Congestion 70, Weather 30
-      return [
-        { label: 'Congestion', pct: 70 },
-        { label: 'Weather', pct: 30 },
-      ];
-    }
-    const likely = (flight.likelyCause || flight.cause || 'Reactionary').toLowerCase();
-    if (likely.includes('weather')) return [{ label: 'Weather', pct: 100 }];
-    if (likely.includes('congestion') || likely.includes('traffic') || likely.includes('atc')) return [{ label: 'Congestion', pct: 100 }];
-    return [{ label: 'Reactionary', pct: 100 }];
-  };
-
-  const causeColor = (label) => {
-    switch(label) {
-      case 'Weather': return '#1976D2';
-      case 'ATC': return '#F57C00';
-      case 'Ground Ops': return '#7B1FA2';
-      case 'Congestion': return '#D32F2F';
-      default: return '#666666';
-    }
-  };
-
   const airlines = ['All', ...Array.from(new Set(normalizedCases.map(c => c.airline)))];
   const severities = ['All', 'minor', 'moderate', 'major'];
 
   return (
     <PageLayout>
     <PageContainer>
+      <GlobalFonts />
       <NavigationBar
         userRole={userRole}
         userName={userName}
@@ -628,9 +704,9 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         />
       <MainContent>
         <ContentArea>
-          <HeaderRow>
-            <Title>Mitigation Tracker Board</Title>
-          </HeaderRow>
+          <div style={{ textAlign:'center', padding:'18px 0 10px' }}>
+            <Title style={{ display:'inline-block', margin:0 }}>Mitigation Tracker Board</Title>
+          </div>
           <TopBar>
             <Search placeholder="Search flights or airlines..." value={query} onChange={(e) => setQuery(e.target.value)} />
             <Select value={filterAirline} onChange={(e) => setFilterAirline(e.target.value)}>
@@ -648,19 +724,56 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
               <Column key={col.key} onDragOver={onDragOver} onDrop={(e) => onDrop(e, col.key)}>
                 <ColumnHeader>{col.title}</ColumnHeader>
                 <ColumnBody>
-                  {filtered.filter(c => c.column === col.key).map(c => (
-                    <Card key={c.id} draggable={canEdit} onDragStart={(e) => onDragStart(e, c.id)} onClick={() => openCase(c)}>
-                      {cardNotifications.has(c.id) && <NotificationDot />}
-                      <CloseIcon title="Close case" onClick={(e) => { e.stopPropagation(); handleCloseCase(c); }}>✕</CloseIcon>
-                      <CardTitle>{c.flightNo}</CardTitle>
-                      <CardSub>{c.airline} • {c.route}</CardSub>
-                      <div style={{ display:'flex', gap:8, marginTop:8, alignItems:'center' }}>
-                        <Badge severity={c.severity}>{c.severity}</Badge>
-                        <Tag>{c.cause}</Tag>
-                        <Assignee>{c.assignee}</Assignee>
-                      </div>
-                    </Card>
-                  ))}
+                  {filtered.filter(c => c.column === col.key).map(c => {
+                    const colIdx = columnOrder.indexOf(c.column);
+                    const prevCol = colIdx > 0 ? columnOrder[colIdx - 1] : null;
+                    const nextCol = colIdx < columnOrder.length - 1 ? columnOrder[colIdx + 1] : null;
+                    const prevTitle = prevCol ? columns.find(x => x.key === prevCol)?.title : null;
+                    const nextTitle = nextCol ? columns.find(x => x.key === nextCol)?.title : null;
+                    return (
+                      <Card key={c.id} draggable={canEdit} onDragStart={(e) => onDragStart(e, c.id)} onClick={() => openCase(c)}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                            {cardNotifications.has(c.id) && (
+                              <span style={{ width:8, height:8, borderRadius:'50%', background:'#e74c3c', display:'inline-block', flexShrink:0 }} />
+                            )}
+                          </div>
+                          <div style={{ display:'flex', alignItems:'center', gap:3 }}>
+                            {canEdit && prevCol && (
+                              <button
+                                title={`← Move to ${prevTitle}`}
+                                style={{ border:'1px solid #d1d5db', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
+                                onClick={(e) => { e.stopPropagation(); setPendingMove({ id: c.id, from: c.column, to: prevCol }); }}
+                              >←</button>
+                            )}
+                            {canEdit && nextCol && (
+                              <button
+                                title={`Move to ${nextTitle} →`}
+                                style={{ border:'1px solid #d1d5db', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
+                                onClick={(e) => { e.stopPropagation(); setPendingMove({ id: c.id, from: c.column, to: nextCol }); }}
+                              >→</button>
+                            )}
+                            <button
+                              title="Close case"
+                              style={{ border:'none', background:'transparent', color:'#bbb', cursor:'pointer', padding:'0 3px', fontSize:14, lineHeight:1 }}
+                              onClick={(e) => { e.stopPropagation(); handleCloseCase(c); }}
+                            >✕</button>
+                          </div>
+                        </div>
+                        <CardTitle>{c.flightNo}</CardTitle>
+                        <CardSub>{c.airline} • {c.route}</CardSub>
+                        <div style={{ display:'flex', gap:4, marginTop:8, alignItems:'center', flexWrap:'wrap' }}>
+                          <Badge severity={c.severity}>{c.severity}</Badge>
+                          {(c.cardCauses || []).slice(0, 2).map(cause => (
+                            <Tag key={cause} style={{ fontSize:11, padding:'2px 6px' }}>{cause}</Tag>
+                          ))}
+                          {(c.cardCauses || []).length > 2 && (
+                            <Tag style={{ fontSize:11, padding:'2px 6px' }}>+{c.cardCauses.length - 2}</Tag>
+                          )}
+                        </div>
+                      </Card>
+                    );
+                  })}
                 </ColumnBody>
               </Column>
             ))}
@@ -678,7 +791,9 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
             <div style={{ border:'1px solid #eef1f4', borderRadius:8, display:'flex', flexDirection:'column', height: 420 }}>
               <div style={{ flex:1, overflow:'auto', padding:10, display:'flex', flexDirection:'column', gap:8 }}>
                 {comments.map(c => {
-                  const isSelf = (c.by || '').toLowerCase() === 'apoc';
+                  const author = c.author_username || c.by || '';
+                  const isSelf = author.toLowerCase() === (userName || 'apoc').toLowerCase();
+                  const ts = c.created_at || c.at;
                   return (
                     <div
                       key={c.id}
@@ -690,8 +805,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                         maxWidth: '75%',
                       }}
                     >
-                      <div style={{ color:'#333' }}>{c.text}</div>
-                      <div style={{ color:'#666', fontSize:12, marginTop:4 }}>{new Date(c.at).toLocaleString()} • {c.by}</div>
+                      <div style={{ color:'#333' }}>{c.comment_text || c.text}</div>
+                      <div style={{ color:'#666', fontSize:12, marginTop:4 }}>{ts ? new Date(ts).toLocaleString() : 'just now'} • {author}</div>
                     </div>
                   );
                 })}
@@ -714,8 +829,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       {pendingMove && (
         <ModalBackdrop>
           <ModalCard>
-            <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Confirm Changes</div>
-            <div style={{ color:'#333' }}>Move Flight {cases.find(c => c.id === pendingMove.id)?.flightNo} from {columns.find(c => c.key === pendingMove.from)?.title} → {columns.find(c => c.key === pendingMove.to)?.title}?</div>
+            <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Confirm Move</div>
+            <div style={{ color:'#333' }}>Move <strong>{normalizedCases.find(c => c.id === pendingMove.id)?.flightNo}</strong> from <em>{columns.find(c => c.key === pendingMove.from)?.title}</em> → <em>{columns.find(c => c.key === pendingMove.to)?.title}</em>?</div>
             <ModalActions>
               <Button onClick={cancelMove}>Cancel</Button>
               <Button primary onClick={confirmMove}>Confirm</Button>
@@ -724,250 +839,298 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         </ModalBackdrop>
       )}
 
-      <Drawer open={!!drawerCase}>
+      {pendingClose && (
+        <ModalBackdrop>
+          <ModalCard>
+            <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Close Case</div>
+            <div style={{ color:'#333' }}>Close case for flight <strong>{pendingClose.flightNo || pendingClose.flight_number}</strong>? It will be moved to the Closed Cases archive.</div>
+            <ModalActions>
+              <Button onClick={() => setPendingClose(null)}>Cancel</Button>
+              <Button primary onClick={confirmClose}>Close Case</Button>
+            </ModalActions>
+          </ModalCard>
+        </ModalBackdrop>
+      )}
+
+      {duplicateWarning && (
+        <ModalBackdrop>
+          <ModalCard>
+            <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Case Already Exists</div>
+            <div style={{ color:'#555' }}>
+              A case for flight <strong>{duplicateWarning.flightNo}</strong> already exists in the{' '}
+              <strong>{duplicateWarning.colName}</strong> column.
+            </div>
+            <ModalActions>
+              <Button primary onClick={() => setDuplicateWarning(null)}>OK</Button>
+            </ModalActions>
+          </ModalCard>
+        </ModalBackdrop>
+      )}
+
+      {drawerCase && (
+        <DrawerOverlay onClick={() => {
+          if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+          setDrawerCase(null);
+          setDrawerMode('view');
+        }} />
+      )}
+      <DetailDrawer isOpen={!!drawerCase}>
         {drawerCase && drawerMode === 'view' && (() => {
-          const base = cases.find(c => c.id === drawerCase.id) || {};
-          const viewTags = new Set(base.tags || []);
-          const flightData = flightsCatalog.find(f => f.flightNo === base.flightNo) || base;
+          const base = normalizedCases.find(c => c.id === drawerCase.id) || drawerCase || {};
+          const viewTags = drawerCase.tags || new Set();
+          const schedDate = base.sched_utc ? new Date(base.sched_utc) : null;
+          const estimatedDate = schedDate && base.delayMin
+            ? new Date(schedDate.getTime() + base.delayMin * 60000)
+            : schedDate;
           return (
-            <DrawerBody>
-              <DrawerSection>
-                <div style={{ fontWeight:800, color:'#333' }}>{base.flightNo || ''}</div>
-                <div style={{ color:'#666', marginTop:4 }}>{base.airline || ''} • {base.route || ''}</div>
-                <div style={{ color:'#666', marginTop:6 }}>Scheduled: {flightData.scheduledTime || base.scheduledTime || '--'}</div>
-                <div style={{ marginTop:6, display:'flex', gap:8, alignItems:'center' }}>
-                  <Badge severity={base.severity || 'minor'}>{base.severity || 'minor'}</Badge>
-                  <span style={{ color:'#333' }}>Predicted Delay: {flightData.predictedDelay === 0 ? 'On Time' : `${flightData.predictedDelay || base.delayMin || 0} min`}</span>
-                </div>
-              </DrawerSection>
+            <>
+              <DrawerHeader>
+                <DrawerTitle>{base.flightNo || '—'}</DrawerTitle>
+                <DrawerSubtitle>
+                  {[base.airline, base.route].filter(Boolean).join(' · ')}
+                </DrawerSubtitle>
+              </DrawerHeader>
 
-              <DrawerSection>
-                <div style={{ fontWeight:800, color:'#333', marginBottom:6 }}>Propagation Impact</div>
-                {base.flightNo === 'BA952' ? (
-                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                    <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                      <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight LH305</div>
-                      <div style={{ color:'#666' }}>+22 min delay</div>
-                    </div>
-                    <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                      <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight AF1825</div>
-                      <div style={{ color:'#666' }}>+15 min delay</div>
-                    </div>
-                  </div>
-                ) : base.flightNo === 'SN789' ? (
-                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                    <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                      <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight EW7823</div>
-                      <div style={{ color:'#666' }}>+8 min delay</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ color:'#666' }}>No propagation detected</div>
-                )}
-              </DrawerSection>
-
-              <DrawerSection>
-                <div style={{ fontWeight:800, color:'#333', marginBottom:6 }}>Cause Breakdown</div>
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {getCauseBreakdown({ flightNo: base.flightNo, likelyCause: base.cause }).map(item => (
-                    <div key={item.label} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                      <div style={{ minWidth:110, color:'#333' }}>{item.label}</div>
-                      <div style={{ flex:1, height:8, background:'#f1f3f4', borderRadius:4 }}>
-                        <div style={{ width:`${item.pct}%`, height:8, background: causeColor(item.label), borderRadius:4 }} />
-                      </div>
-                      <div style={{ minWidth:40, color:'#333', textAlign:'right' }}>{item.pct}%</div>
-                    </div>
-                  ))}
-                </div>
-              </DrawerSection>
-
-              <DrawerSection>
-                <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Tag Cause</div>
-                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-                  {['Weather','Traffic','Reactionary','Technical'].map(name => (
-                    <CauseButton key={name} active={viewTags.has(name)} onClick={() => { if (canEdit || canReassign) { if (viewTags.has(name)) viewTags.delete(name); else viewTags.add(name); setCases(prev => prev.map(c => c.id === base.id ? { ...c, tags: Array.from(viewTags) } : c)); setCardNotifications(prev => new Set(prev).add(base.id)); } }}>{name} {viewTags.has(name) ? '✓' : ''}</CauseButton>
-                  ))}
-                </div>
-                <div style={{ marginTop:8 }}>
-                  <input
-                    style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%' }}
-                    placeholder="Type a cause and press Enter to tag"
-                    onKeyDown={(e) => handleViewTagEnter(e, base)}
-                  />
-                </div>
-                {viewTags.size > 0 && (
-                  <div style={{ display:'flex', gap:8, marginTop:8, flexWrap:'wrap' }}>
-                    {Array.from(viewTags).map(name => (
-                      <span key={name} style={{ position:'relative' }}>
-                        <Pill>{name}</Pill>
-                        <button
-                          title="Remove"
-                          style={{ position:'absolute', top:-6, right:-6, border:'none', background:'#e2e8f0', borderRadius:'50%', width:16, height:16, cursor:'pointer', fontSize:10 }}
-                          onClick={() => { setCases(prev => prev.map(c => c.id === base.id ? { ...c, tags: (c.tags || []).filter(t => t !== name) } : c)); setCardNotifications(prev => new Set(prev).add(base.id)); }}
-                        >×</button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </DrawerSection>
-
-              <DrawerSection>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <div style={{ fontWeight:800, color:'#333' }}>Comments</div>
-                  <button style={{ border:'none', background:'transparent', color:'#1A4B8F', cursor:'pointer' }} onClick={() => setShowCommentsPanel(true)}>⤢</button>
-                </div>
-                <div style={{ color:'#666', marginTop:6 }}>
-                  {(base.comments && base.comments.length) ? base.comments[base.comments.length - 1].text : 'No comments yet.'}
-                </div>
-              </DrawerSection>
-
-              <DrawerSection>
-                <div style={{ color:'#333', fontSize:12 }}>Created by {base.createdBy || 'APOC'} • {base.createdAt ? new Date(base.createdAt).toLocaleString() : new Date().toLocaleString()}</div>
-                {base.deadline && (
-                  <div style={{ color:'#666', fontSize:12, marginTop:4 }}>Deadline: {new Date(base.deadline).toLocaleString()}</div>
-                )}
-              </DrawerSection>
-
-              <div style={{ display:'flex', gap:8 }}>
-                <Button onClick={() => setDrawerCase(null)}>Close</Button>
-              </div>
-            </DrawerBody>
-          );
-        })()}
-
-        {drawerCase && drawerMode === 'create' && (
-            <DrawerBody>
-            <DrawerSection>
-              <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Create Case</div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                <input
-                  style={{ padding:'10px 12px', border:'1px solid #e1e5e9', borderRadius:8 }}
-                  placeholder="Search flight number..."
-                  value={flightQuery}
-                  onChange={(e) => setFlightQuery(e.target.value)}
-                />
-                {flightQuery && (
-                  <div style={{ border:'1px solid #eef1f4', borderRadius:8, maxHeight:160, overflow:'auto', background:'#fff' }}>
-                    {flightsCatalog.filter(f => f.flightNo.toLowerCase().includes(flightQuery.toLowerCase())).map(f => (
-                      <div key={f.flightNo} style={{ padding:10, cursor:'pointer' }} onClick={() => { setSelectedFlight(f); setFlightQuery(f.flightNo); }}>
-                        {f.flightNo} • {f.airline} • {f.route}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </DrawerSection>
-
-            {selectedFlight && (
-              <>
+              <DrawerContent>
                 <DrawerSection>
-                  <div style={{ fontWeight:800, color:'#333' }}>{selectedFlight.flightNo}</div>
-                  <div style={{ color:'#666', marginTop:4 }}>{selectedFlight.airline} • {selectedFlight.route}</div>
-                  <div style={{ color:'#666', marginTop:6 }}>Scheduled: {selectedFlight.scheduledTime}</div>
-                  <div style={{ marginTop:6, display:'flex', gap:8, alignItems:'center' }}>
-                    <Badge severity={severityFromDelay(selectedFlight.predictedDelay)}>{severityFromDelay(selectedFlight.predictedDelay)}</Badge>
-                    <span style={{ color:'#333' }}>Predicted Delay: {selectedFlight.predictedDelay === 0 ? 'On Time' : `${selectedFlight.predictedDelay} min`}</span>
-                  </div>
+                  <DrawerSectionTitle>Flight Details</DrawerSectionTitle>
+                  <PredictionBlock>
+                    <PredictionRow>
+                      <PredictionLabel>Scheduled</PredictionLabel>
+                      <PredictionValue>
+                        {schedDate ? schedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </PredictionValue>
+                    </PredictionRow>
+                    <PredictionRow>
+                      <PredictionLabel>Estimated</PredictionLabel>
+                      <PredictionValue style={{ color: base.delayMin > 0 ? '#dc2626' : '#16a34a' }}>
+                        {estimatedDate ? estimatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </PredictionValue>
+                    </PredictionRow>
+                    <PredictionRow>
+                      <PredictionLabel>Delay Category</PredictionLabel>
+                      <PredictionValue>
+                        <Badge severity={base.severity || 'minor'}>{base.severity || 'minor'}</Badge>
+                      </PredictionValue>
+                    </PredictionRow>
+                    <PredictionRow>
+                      <PredictionLabel>Predicted Delay</PredictionLabel>
+                      <PredictionValue style={{ color: base.delayMin > 0 ? '#dc2626' : '#16a34a' }}>
+                        {base.delayMin > 0 ? `+${base.delayMin} min` : 'On Time'}
+                      </PredictionValue>
+                    </PredictionRow>
+                  </PredictionBlock>
                 </DrawerSection>
 
                 <DrawerSection>
-                  <div style={{ fontWeight:800, color:'#333', marginBottom:6 }}>Propagation Impact</div>
-                  {selectedFlight.flightNo === 'BA952' ? (
-                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                      <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                        <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight LH305</div>
-                        <div style={{ color:'#666' }}>+22 min delay</div>
-                      </div>
-                      <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                        <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight AF1825</div>
-                        <div style={{ color:'#666' }}>+15 min delay</div>
-                      </div>
-                    </div>
-                  ) : selectedFlight.flightNo === 'SN789' ? (
-                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                      <div style={{ padding:12, background:'#f8f9fa', borderRadius:8, borderLeft:'3px solid #1A4B8F' }}>
-                        <div style={{ fontWeight:600, color:'#1A4B8F' }}>Impacts Flight EW7823</div>
-                        <div style={{ color:'#666' }}>+8 min delay</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ color:'#666' }}>No propagation detected</div>
-                  )}
+                  <DrawerSectionTitle>Propagation Impact</DrawerSectionTitle>
+                  <div style={{ color:'#666', fontSize:13, lineHeight:1.6 }}>Propagation analysis not available — check Flights table for connected flights.</div>
                 </DrawerSection>
 
                 <DrawerSection>
-                  <div style={{ fontWeight:800, color:'#333', marginBottom:6 }}>Cause Breakdown</div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                    {getCauseBreakdown(selectedFlight).map(item => (
-                      <div key={item.label} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                        <div style={{ minWidth:110, color:'#333' }}>{item.label}</div>
-                        <div style={{ flex:1, height:8, background:'#f1f3f4', borderRadius:4 }}>
-                          <div style={{ width:`${item.pct}%`, height:8, background: causeColor(item.label), borderRadius:4 }} />
-                        </div>
-                        <div style={{ minWidth:40, color:'#333', textAlign:'right' }}>{item.pct}%</div>
+                  <DrawerSectionTitle>Likely Cause Identified</DrawerSectionTitle>
+                  {(() => {
+                    const causes = Array.isArray(base.tagged_causes) && base.tagged_causes.length > 0
+                      ? base.tagged_causes
+                      : (base.cause && base.cause !== 'Unknown' ? [base.cause] : []);
+                    if (causes.length === 0) return <div style={{ color:'#999', fontSize:13 }}>No cause identified yet.</div>;
+                    return (
+                      <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                        {causes.map(c => (
+                          <span key={c} style={{ padding:'4px 12px', borderRadius:999, background:'#eef2ff', color:'#1A4B8F', fontSize:13, fontWeight:600 }}>{c}</span>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                 </DrawerSection>
 
                 <DrawerSection>
-                  <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Tag Cause</div>
+                  <DrawerSectionTitle>Tag Cause</DrawerSectionTitle>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
                     {['Weather','Traffic','Reactionary','Technical'].map(name => (
-                      <CauseButton key={name} active={createTags.has(name)} onClick={() => toggleCreateTag(name)}>{name} {createTags.has(name) ? '✓' : ''}</CauseButton>
+                      <CauseButton key={name} active={viewTags.has(name)} onClick={() => toggleViewTag(name)}>{name} {viewTags.has(name) ? '✓' : ''}</CauseButton>
                     ))}
                   </div>
                   <div style={{ marginTop:8 }}>
                     <input
-                      style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%' }}
+                      style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%', fontFamily:'inherit' }}
                       placeholder="Type a cause and press Enter to tag"
-                      onKeyDown={handleCreateTagEnter}
+                      onKeyDown={handleViewTagEnter}
                     />
                   </div>
-                  {createTags.size > 0 && (
+                  {viewTags.size > 0 && (
                     <div style={{ display:'flex', gap:8, marginTop:8, flexWrap:'wrap' }}>
-                      {Array.from(createTags).map(name => (
+                      {Array.from(viewTags).map(name => (
                         <span key={name} style={{ position:'relative' }}>
                           <Pill>{name}</Pill>
                           <button
                             title="Remove"
                             style={{ position:'absolute', top:-6, right:-6, border:'none', background:'#e2e8f0', borderRadius:'50%', width:16, height:16, cursor:'pointer', fontSize:10 }}
-                            onClick={() => setCreateTags(prev => { const n = new Set(prev); n.delete(name); return n; })}
+                            onClick={() => removeViewTag(name)}
                           >×</button>
                         </span>
                       ))}
                     </div>
                   )}
-                  
                 </DrawerSection>
 
                 <DrawerSection>
-                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <div style={{ fontWeight:800, color:'#333' }}>Comments</div>
-                  <button style={{ border:'none', background:'transparent', color:'#1A4B8F', cursor:'pointer' }} onClick={() => setShowCommentsPanel(true)}>⤢</button>
-                </div>
-                <div style={{ color:'#666', marginTop:6 }}>
-                  {comments.length ? comments[comments.length - 1].text : 'No comments yet.'}
-                </div>
-              </DrawerSection>
-
-              <DrawerSection>
-                  <div style={{ color:'#333', fontSize:12 }}>Created by APOC • {new Date().toLocaleString()}</div>
-                  <div style={{ marginTop:8 }}>
-                    <div style={{ fontWeight:800, color:'#333', marginBottom:6 }}>Deadline (optional)</div>
-                    <input type="datetime-local" style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%' }} value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                    <DrawerSectionTitle style={{ marginBottom:0 }}>Comments</DrawerSectionTitle>
+                    <button style={{ border:'none', background:'transparent', color:'#1A4B8F', cursor:'pointer', fontSize:16 }} onClick={() => setShowCommentsPanel(true)}>⤢</button>
+                  </div>
+                  <div style={{ color:'#666', fontSize:13 }}>
+                    {comments.length ? (comments[comments.length - 1].comment_text || comments[comments.length - 1].text) : 'No comments yet.'}
                   </div>
                 </DrawerSection>
 
-                <div style={{ display:'flex', gap:8 }}>
-                  <Button onClick={() => { setDrawerCase(null); setDrawerMode('view'); }}>Cancel</Button>
-                  <Button primary onClick={saveNewCase} disabled={!selectedFlight}>Save Case</Button>
+                <DrawerSection>
+                  <div style={{ color:'#94a3b8', fontSize:12 }}>
+                    Created by {base.createdBy || 'APOC'} · {base.createdAt ? new Date(base.createdAt).toLocaleString() : new Date().toLocaleString()}
+                  </div>
+                  {base.deadline && (
+                    <div style={{ color:'#666', fontSize:12, marginTop:4 }}>Deadline: {new Date(base.deadline).toLocaleString()}</div>
+                  )}
+                </DrawerSection>
+              </DrawerContent>
+
+              <DrawerFooter>
+                <StyledDrawerButton onClick={() => {
+                  if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+                  setDrawerCase(null);
+                }}>Close</StyledDrawerButton>
+              </DrawerFooter>
+            </>
+          );
+        })()}
+
+        {drawerCase && drawerMode === 'create' && (
+          <>
+            <DrawerHeader>
+              <DrawerTitle>Create Case</DrawerTitle>
+              <DrawerSubtitle>Search for a flight to open a mitigation case</DrawerSubtitle>
+            </DrawerHeader>
+
+            <DrawerContent>
+              <DrawerSection>
+                <DrawerSectionTitle>Select Flight</DrawerSectionTitle>
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  <input
+                    style={{ padding:'10px 12px', border:'1px solid #e1e5e9', borderRadius:8, fontFamily:'inherit' }}
+                    placeholder="Search flight number..."
+                    value={flightQuery}
+                    onChange={(e) => setFlightQuery(e.target.value)}
+                  />
+                  {flightQuery && (
+                    <div style={{ border:'1px solid #eef1f4', borderRadius:8, maxHeight:160, overflow:'auto', background:'#fff' }}>
+                      {liveFlights
+                        .filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase()))
+                        .slice(0, 20)
+                        .map(f => (
+                          <div key={f.flightNo + f.sched_utc} style={{ padding:10, cursor:'pointer', borderBottom:'1px solid #f5f5f5' }}
+                            onClick={() => { setSelectedFlight(f); setFlightQuery(f.flightNo); }}>
+                            <span style={{ fontWeight:600 }}>{f.flightNo}</span>
+                            <span style={{ color:'#666', marginLeft:8 }}>{f.airline} · {f.route}</span>
+                            {f.predictedDelay > 0 && <span style={{ color:'#dc2626', marginLeft:8, fontSize:12 }}>+{f.predictedDelay} min</span>}
+                          </div>
+                        ))
+                      }
+                      {liveFlights.filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase())).length === 0 && (
+                        <div style={{ padding:10, color:'#999', fontSize:13 }}>No flights found</div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </>
-            )}
-          </DrawerBody>
+              </DrawerSection>
+
+              {selectedFlight && (
+                <>
+                  <DrawerSection>
+                    <DrawerSectionTitle>Flight Details</DrawerSectionTitle>
+                    <PredictionBlock>
+                      <PredictionRow>
+                        <PredictionLabel>Flight</PredictionLabel>
+                        <PredictionValue>{selectedFlight.flightNo}</PredictionValue>
+                      </PredictionRow>
+                      <PredictionRow>
+                        <PredictionLabel>Airline · Route</PredictionLabel>
+                        <PredictionValue style={{ fontSize:13 }}>{selectedFlight.airline} · {selectedFlight.route}</PredictionValue>
+                      </PredictionRow>
+                      <PredictionRow>
+                        <PredictionLabel>Scheduled</PredictionLabel>
+                        <PredictionValue>
+                          {selectedFlight.scheduledTime || (selectedFlight.sched_utc ? new Date(selectedFlight.sched_utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—')}
+                        </PredictionValue>
+                      </PredictionRow>
+                      <PredictionRow>
+                        <PredictionLabel>Delay Category</PredictionLabel>
+                        <PredictionValue>
+                          <Badge severity={severityFromDelay(selectedFlight.predictedDelay)}>{severityFromDelay(selectedFlight.predictedDelay)}</Badge>
+                        </PredictionValue>
+                      </PredictionRow>
+                      <PredictionRow>
+                        <PredictionLabel>Predicted Delay</PredictionLabel>
+                        <PredictionValue style={{ color: selectedFlight.predictedDelay > 0 ? '#dc2626' : '#16a34a' }}>
+                          {selectedFlight.predictedDelay > 0 ? `+${selectedFlight.predictedDelay} min` : 'On Time'}
+                        </PredictionValue>
+                      </PredictionRow>
+                    </PredictionBlock>
+                  </DrawerSection>
+
+                  <DrawerSection>
+                    <DrawerSectionTitle>Likely Cause Identified</DrawerSectionTitle>
+                    {selectedFlight.likelyCause
+                      ? <span style={{ padding:'4px 12px', borderRadius:999, background:'#eef2ff', color:'#1A4B8F', fontSize:13, fontWeight:600 }}>{selectedFlight.likelyCause}</span>
+                      : <div style={{ color:'#999', fontSize:13 }}>No cause identified.</div>
+                    }
+                  </DrawerSection>
+
+                  <DrawerSection>
+                    <DrawerSectionTitle>Tag Cause</DrawerSectionTitle>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                      {['Weather','Traffic','Reactionary','Technical'].map(name => (
+                        <CauseButton key={name} active={createTags.has(name)} onClick={() => toggleCreateTag(name)}>{name} {createTags.has(name) ? '✓' : ''}</CauseButton>
+                      ))}
+                    </div>
+                    <div style={{ marginTop:8 }}>
+                      <input
+                        style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%', fontFamily:'inherit' }}
+                        placeholder="Type a cause and press Enter to tag"
+                        onKeyDown={handleCreateTagEnter}
+                      />
+                    </div>
+                    {createTags.size > 0 && (
+                      <div style={{ display:'flex', gap:8, marginTop:8, flexWrap:'wrap' }}>
+                        {Array.from(createTags).map(name => (
+                          <span key={name} style={{ position:'relative' }}>
+                            <Pill>{name}</Pill>
+                            <button
+                              title="Remove"
+                              style={{ position:'absolute', top:-6, right:-6, border:'none', background:'#e2e8f0', borderRadius:'50%', width:16, height:16, cursor:'pointer', fontSize:10 }}
+                              onClick={() => setCreateTags(prev => { const n = new Set(prev); n.delete(name); return n; })}
+                            >×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </DrawerSection>
+
+                  <DrawerSection>
+                    <DrawerSectionTitle>Deadline (optional)</DrawerSectionTitle>
+                    <input type="datetime-local" style={{ padding:'8px 10px', border:'1px solid #e1e5e9', borderRadius:8, width:'100%', fontFamily:'inherit' }} value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                    <div style={{ color:'#94a3b8', fontSize:12, marginTop:8 }}>Created by {userName || 'APOC'} · {new Date().toLocaleString()}</div>
+                  </DrawerSection>
+                </>
+              )}
+            </DrawerContent>
+
+            <DrawerFooter>
+              <StyledDrawerButton onClick={() => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } setDrawerCase(null); setDrawerMode('view'); }}>Cancel</StyledDrawerButton>
+              <StyledDrawerButton primary onClick={saveNewCase} disabled={!selectedFlight}>Save Case</StyledDrawerButton>
+            </DrawerFooter>
+          </>
         )}
-      </Drawer>
+      </DetailDrawer>
 
       {showClosed && (
         <ModalBackdrop onClick={() => setShowClosed(false)}>
@@ -978,11 +1141,19 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
             ) : (
               <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight: '60vh', overflow:'auto' }}>
                 {closedCases.map(cc => (
-                  <div key={cc.id} style={{ padding:12, border:'1px solid #eef1f4', borderRadius:8 }}>
-                    <div style={{ fontWeight:800, color:'#333' }}>{cc.flightNo}</div>
-                    <div style={{ color:'#666', fontSize:12 }}>{cc.airline} • {cc.route}</div>
-                    <div style={{ color:'#666', fontSize:12 }}>Closed: {new Date(cc.closedAt).toLocaleString()}</div>
-                    <div style={{ marginTop:6 }}><Badge severity={cc.severity}>{cc.severity}</Badge> <Tag>{cc.cause}</Tag> <Pill>{cc.assignee}</Pill></div>
+                  <div key={cc.id} style={{ padding:12, border:'1px solid #eef1f4', borderRadius:8, position:'relative' }}>
+                    <button
+                      title="Permanently delete"
+                      style={{ position:'absolute', top:8, right:8, border:'none', background:'transparent', cursor:'pointer', color:'#bbb', fontSize:16, lineHeight:1, padding:2 }}
+                      onClick={() => permanentDeleteHandler(cc)}
+                    >🗑</button>
+                    <div style={{ fontWeight:800, color:'#333', paddingRight:24 }}>{cc.flightNo || cc.flight_number}</div>
+                    <div style={{ color:'#666', fontSize:12 }}>{cc.airline || cc.airline_code} • {cc.route}</div>
+                    <div style={{ color:'#666', fontSize:12 }}>Closed: {cc.closed_at ? new Date(cc.closed_at).toLocaleString() : cc.closedAt ? new Date(cc.closedAt).toLocaleString() : '—'}</div>
+                    <div style={{ marginTop:6, display:'flex', gap:6, flexWrap:'wrap' }}>
+                      {cc.severity && <Badge severity={cc.severity}>{cc.severity}</Badge>}
+                      {(cc.cause || cc.likely_cause) && <Tag>{cc.cause || cc.likely_cause}</Tag>}
+                    </div>
                   </div>
                 ))}
               </div>

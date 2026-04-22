@@ -405,15 +405,16 @@ const SimulationPage = ({
         />
         <MainContent>
           <ContentArea>
-            <PageHeaderRow>
-              <PageTitle>Delay Simulation</PageTitle>
+            <div style={{ position:'relative', textAlign:'center', padding:'18px 0 10px' }}>
+              <PageTitle style={{ display:'inline-block', margin:0 }}>Delay Simulation</PageTitle>
               {overrideCount > 0 && (
-                <span style={{ fontSize: 12, background: tokens.primaryLight,
+                <span style={{ position:'absolute', right:0, top:'50%', transform:'translateY(-50%)',
+                  fontSize: 12, background: tokens.primaryLight,
                   color: tokens.primary, padding: '4px 10px', borderRadius: 999, fontWeight: 600 }}>
                   {overrideCount} override{overrideCount > 1 ? 's' : ''}
                 </span>
               )}
-            </PageHeaderRow>
+            </div>
 
             <Panels>
 

@@ -25,6 +25,18 @@ const authAxios = () => {
 // CASES ENDPOINTS
 // ─────────────────────────────────────────────────────────────────
 
+const parseCauses = (tagged) => {
+  if (Array.isArray(tagged)) return tagged;
+  const str = (tagged || '').trim();
+  if (!str) return [];
+  return str.startsWith('{')
+    ? str.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean)
+    : str.split(',').map(s => s.trim()).filter(Boolean);
+};
+
+const normalizeCases = (cases) =>
+  (cases || []).map(c => ({ ...c, tagged_causes: parseCauses(c.tagged_causes) }));
+
 /**
  * Get all active (non-closed) mitigation cases
  * @returns {Promise<{success: boolean, cases: Array}>}
@@ -32,7 +44,8 @@ const authAxios = () => {
 export const getCases = async () => {
   try {
     const response = await authAxios().get('/mitigation/cases');
-    return response.data;
+    const data = response.data;
+    return { ...data, cases: normalizeCases(data.cases) };
   } catch (error) {
     console.error('Error fetching cases:', error);
     throw error;
@@ -46,7 +59,8 @@ export const getCases = async () => {
 export const getClosedCases = async () => {
   try {
     const response = await authAxios().get('/mitigation/cases/closed');
-    return response.data;
+    const data = response.data;
+    return { ...data, cases: normalizeCases(data.cases) };
   } catch (error) {
     console.error('Error fetching closed cases:', error);
     throw error;
@@ -74,9 +88,10 @@ export const createCase = async (payload) => {
  * @param {string} status - New status (delayNoted, inProgress, verified, resolved, closed)
  * @returns {Promise<{success: boolean, case: Object}>}
  */
-export const updateCaseStatus = async (id, status) => {
+export const updateCaseStatus = async (id, status, version) => {
   try {
-    const response = await authAxios().patch(`/mitigation/cases/${id}/status`, { status });
+    const body = version !== undefined ? { status, version } : { status };
+    const response = await authAxios().patch(`/mitigation/cases/${id}/status`, body);
     return response.data.case;
   } catch (error) {
     console.error('Error updating case status:', error);
@@ -105,12 +120,23 @@ export const updateCase = async (id, payload) => {
  * @param {number} id - Case ID
  * @returns {Promise<{success: boolean, case: Object}>}
  */
-export const closeCase = async (id) => {
+export const closeCase = async (id, version) => {
   try {
-    const response = await authAxios().delete(`/mitigation/cases/${id}`);
+    const body = version !== undefined ? { version } : {};
+    const response = await authAxios().delete(`/mitigation/cases/${id}`, { data: body });
     return response.data.case;
   } catch (error) {
     console.error('Error closing case:', error);
+    throw error;
+  }
+};
+
+export const permanentDeleteCase = async (id) => {
+  try {
+    const response = await authAxios().delete(`/mitigation/cases/${id}/permanent`);
+    return response.data;
+  } catch (error) {
+    console.error('Error permanently deleting case:', error);
     throw error;
   }
 };
