@@ -1,7 +1,7 @@
 /**
  * App.js — COMPLETE REPLACEMENT
  */
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import LandingPage     from './components/LandingPage';
 import LoginPage       from './components/LoginPage';
 import Dashboard       from './components/Dashboard';
@@ -12,6 +12,7 @@ import UserManagement  from './components/UserManagement';
 import Settings        from './components/Settings';
 import Profile         from './components/Profile';
 import { createCase }  from './services/mitigationService';
+import API_BASE_URL    from './config/api';
 import './App.css';
 import { GlobalFonts } from './styles/components.styles';
 
@@ -24,6 +25,8 @@ function App() {
   const [activeTab,      setActiveTab]      = useState('Dashboard');
   const [notifOpen,      setNotifOpen]      = useState(false);
   const [hasNew,         setHasNew]         = useState(false);
+  const [adminDeletionRequests, setAdminDeletionRequests] = useState([]);
+  const [adminHasNewRequests, setAdminHasNewRequests] = useState(false);
   const [dashRefreshKey,    setDashRefreshKey]    = useState(0);
   const [simulationResult,  setSimulationResult]  = useState(null);
 
@@ -33,6 +36,7 @@ function App() {
   // display array — always rebuilt from the Map, never replaced wholesale.
   const storeRef  = useRef(new Map());   // flightNo → alertEntry
   const nextId    = useRef(1);
+  const tokenValidationIntervalRef = useRef(null);
   const [liveAlerts, setLiveAlerts] = useState([]);
 
   // Rebuild display array from the Map after every mutation
@@ -114,17 +118,146 @@ function App() {
     setActiveTab(userData.role === 'Admin' ? 'User Management' : 'Dashboard');
   };
 
-  const handleLogout = () => {
+  const fetchAdminDeletionRequests = useCallback(async () => {
+    if (userRole !== 'Admin') return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/auth/deletion-requests`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        const mappedRequests = (data.requests || []).map(row => ({
+          id: row.id,
+          userId: row.user_id,
+          name: row.name,
+          username: row.username,
+          role: row.role,
+          requestTime: row.requested_at ? new Date(row.requested_at).toLocaleString() : 'Unknown'
+        }));
+
+        setAdminDeletionRequests(prev => {
+          if (mappedRequests.length > prev.length) {
+            setAdminHasNewRequests(true);
+          }
+          return mappedRequests;
+        });
+      }
+    } catch (error) {
+      // Polling should stay silent; NavigationBar will simply keep the last known state.
+    }
+  }, [userRole]);
+
+  const handleLogout = useCallback((message) => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     storeRef.current.clear();
     setLiveAlerts([]);
     setNotifOpen(false);
     setHasNew(false);
+    setAdminDeletionRequests([]);
+    setAdminHasNewRequests(false);
     setView(VIEW.LANDING);
     setUserName('');
     setActiveTab('Dashboard');
-  };
+    if (message) {
+      window.alert(message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view !== VIEW.APP) {
+      if (tokenValidationIntervalRef.current) {
+        clearInterval(tokenValidationIntervalRef.current);
+        tokenValidationIntervalRef.current = null;
+      }
+      return undefined;
+    }
+
+    const revalidateToken = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        handleLogout();
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/auth/verify`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          handleLogout();
+          return;
+        }
+
+        const data = await response.json();
+        if (!data.success || !data.user) {
+          handleLogout();
+          return;
+        }
+
+        if (data.user.status === 'inactive') {
+          handleLogout('Your account has been deactivated. Please contact an administrator.');
+          return;
+        }
+
+        const nextRole = data.user.role;
+        const nextName = data.user.name || data.user.username || '';
+
+        setUserRole(prevRole => {
+          if (prevRole !== nextRole) {
+            setActiveTab(currentTab => {
+              const adminTabs = ['User Management', 'Settings', 'Profile'];
+              const userTabs = ['Dashboard', 'Flights', 'Simulation', 'Mitigation Board', 'Profile'];
+              if (nextRole === 'Admin' && !adminTabs.includes(currentTab)) {
+                return 'User Management';
+              }
+              if (nextRole !== 'Admin' && !userTabs.includes(currentTab)) {
+                return 'Dashboard';
+              }
+              return currentTab;
+            });
+          }
+          return nextRole;
+        });
+        setUserName(prevName => (prevName === nextName ? prevName : nextName));
+      } catch (error) {
+        console.error('Token re-validation failed:', error);
+        handleLogout();
+      }
+    };
+
+    tokenValidationIntervalRef.current = setInterval(revalidateToken, 5 * 60 * 1000);
+
+    return () => {
+      if (tokenValidationIntervalRef.current) {
+        clearInterval(tokenValidationIntervalRef.current);
+        tokenValidationIntervalRef.current = null;
+      }
+    };
+  }, [handleLogout, view]);
+
+  useEffect(() => {
+    if (view !== VIEW.APP || userRole !== 'Admin') {
+      return undefined;
+    }
+
+    fetchAdminDeletionRequests();
+    const deletionRequestsInterval = setInterval(fetchAdminDeletionRequests, 60 * 1000);
+    return () => clearInterval(deletionRequestsInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, userRole]);
+
+  const handleAdminDeletionDismiss = useCallback((requestId) => {
+    setAdminDeletionRequests(prev => prev.filter(request => request.id !== requestId));
+  }, []);
+
+  const handleAdminRequestsRead = useCallback(() => {
+    setAdminHasNewRequests(false);
+  }, []);
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
@@ -134,6 +267,7 @@ function App() {
   const handleBellClick = () => {
     setNotifOpen(v => !v);
     setHasNew(false);
+    handleAdminRequestsRead();
   };
 
   const handleSimulationResult = (res) => setSimulationResult(res);
@@ -148,8 +282,12 @@ function App() {
     hasNewNotif:         hasNew,
     notifOpen,
     liveAlerts,
+    adminDeletionRequests,
+    adminHasNewRequests,
     onNotifClick:        handleBellClick,
     onNotifClose:        () => setNotifOpen(false),
+    onAdminRequestsDismiss: handleAdminDeletionDismiss,
+    onAdminRequestsRead: handleAdminRequestsRead,
     onAlertDismiss:      handleAlertDismiss,
     onAlertAddToBoard:   handleAlertAddToBoard,
     simulationResult,

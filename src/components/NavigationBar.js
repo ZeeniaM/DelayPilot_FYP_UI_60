@@ -19,7 +19,11 @@ const NavigationBar = ({
   userRole, userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false,
   liveAlerts = [],
+  adminDeletionRequests = [],
+  adminHasNewRequests = false,
   onNotifClick, onNotifClose,
+  onAdminRequestsDismiss,
+  onAdminRequestsRead,
   onAlertDismiss,      // (flightNo) => void
   onAlertAddToBoard,   // (flightNo) => void
 }) => {
@@ -45,9 +49,26 @@ const NavigationBar = ({
     return () => document.removeEventListener('keydown', h);
   }, [notifOpen, onNotifClose]);
 
+  useEffect(() => {
+    if (userRole === 'Admin' && notifOpen) {
+      onAdminRequestsRead && onAdminRequestsRead();
+    }
+  }, [notifOpen, onAdminRequestsRead, userRole]);
+
   // Only show non-dismissed alerts
   const visibleAlerts = liveAlerts.filter(a => !a.isDismissed);
-  const activeCount   = visibleAlerts.length;
+  const activeCount = userRole === 'Admin'
+    ? adminDeletionRequests.length
+    : visibleAlerts.length;
+  const showBellDot = userRole === 'Admin'
+    ? adminHasNewRequests && !notifOpen
+    : hasNewNotif && !notifOpen;
+
+  const formatRequestTime = (value) => {
+    if (!value) return 'Unknown';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  };
 
   const handleDismiss = (e, flightNo) => {
     e.stopPropagation();
@@ -109,7 +130,7 @@ const NavigationBar = ({
               <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
             </svg>
             {/* Red dot for new unseen alerts */}
-            {hasNewNotif && !notifOpen && (
+            {showBellDot && (
               <span style={{
                 position: 'absolute', top: 2, right: 2,
                 width: 8, height: 8,
@@ -197,17 +218,19 @@ const NavigationBar = ({
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{
-                  background: '#fee2e2', color: '#991B1B',
+                  background: userRole === 'Admin' ? '#fef3c7' : '#fee2e2',
+                  color: userRole === 'Admin' ? '#92400e' : '#991B1B',
                   borderRadius: '50%', width: 30, height: 30,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 14, flexShrink: 0,
                 }}>⚠</span>
                 <span style={{ fontWeight: 700, fontSize: 15, color: '#1A4B8F' }}>
-                  Active Alerts
+                  {userRole === 'Admin' ? 'Account Deletion Requests' : 'Active Alerts'}
                 </span>
                 {activeCount > 0 && (
                   <span style={{
-                    background: '#fee2e2', color: '#991B1B',
+                    background: userRole === 'Admin' ? '#fef3c7' : '#fee2e2',
+                    color: userRole === 'Admin' ? '#92400e' : '#991B1B',
                     fontSize: 11, fontWeight: 700,
                     padding: '2px 9px', borderRadius: 999,
                   }}>
@@ -227,7 +250,58 @@ const NavigationBar = ({
 
             {/* Body */}
             <div style={{ overflowY: 'auto', flex: 1, padding: '12px 16px' }}>
-              {visibleAlerts.length === 0 ? (
+              {userRole === 'Admin' ? (
+                adminDeletionRequests.length === 0 ? (
+                  <div style={{
+                    color: '#888', fontSize: 14,
+                    textAlign: 'center', padding: '40px 0',
+                  }}>
+                    No pending account deletion requests.
+                  </div>
+                ) : (
+                  adminDeletionRequests.map(request => (
+                    <div
+                      key={request.id}
+                      style={{
+                        background: '#fff',
+                        border: '1px solid #e8eef8',
+                        borderLeft: '4px solid #f59e0b',
+                        borderRadius: 8,
+                        padding: '12px 14px',
+                        marginBottom: 10,
+                      }}
+                    >
+                      <strong style={{ color: '#1A4B8F', fontSize: 14 }}>
+                        {request.name || request.username || 'Unknown User'}
+                      </strong>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                        {request.username} · {request.role}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#999', marginTop: 8, marginBottom: 10 }}>
+                        Requested: {formatRequestTime(request.requestTime)}
+                      </div>
+                      <button
+                        onClick={() => {
+                          onNotifClose && onNotifClose();
+                          onTabChange && onTabChange('User Management');
+                          onAdminRequestsDismiss && onAdminRequestsDismiss(request.id);
+                        }}
+                        style={{
+                          padding: '6px 16px', fontSize: 12,
+                          border: 'none',
+                          background: '#1A4B8F',
+                          color: '#fff',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                        }}
+                      >
+                        View in User Management
+                      </button>
+                    </div>
+                  ))
+                )
+              ) : visibleAlerts.length === 0 ? (
                 <div style={{
                   color: '#888', fontSize: 14,
                   textAlign: 'center', padding: '40px 0',

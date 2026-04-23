@@ -38,6 +38,7 @@ const HeaderRow = styled.div`
   display: flex;
   align-items: center;
   justify-content: space-between;
+  text-align: center;
 `;
 
 const Title = styled.h1`
@@ -78,67 +79,6 @@ const Select = styled.select`
   font-size: 14px;
   background: white;
   color: #333333;
-`;
-
-const NotificationBell = styled.div`
-  position: relative;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: 8px;
-  transition: background 0.2s ease;
-
-  &:hover {
-    background: rgba(26, 75, 143, 0.1);
-  }
-`;
-
-const NotificationDot = styled.span`
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #e74c3c;
-`;
-
-const NotificationDropdown = styled.div`
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  min-width: 300px;
-  z-index: 1000;
-  display: ${props => props.show ? 'block' : 'none'};
-`;
-
-const NotificationItem = styled.div`
-  padding: 12px 16px;
-  border-bottom: 1px solid #eef1f4;
-  cursor: pointer;
-  transition: background 0.2s ease;
-
-  &:hover {
-    background: rgba(26, 75, 143, 0.1);
-  }
-
-  &:last-child {
-    border-bottom: none;
-  }
-`;
-
-const NotificationTitle = styled.div`
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 4px;
-`;
-
-const NotificationSubtitle = styled.div`
-  font-size: 12px;
-  color: #666;
 `;
 
 const Card = styled.div`
@@ -306,25 +246,20 @@ const mockUsers = [
   { id: 5, name: 'Emily Davis', username: 'apoc2', email: 'emily_ops_mail@munichmail.com', role: 'APOC', status: 'active', lastLogin: '2024-01-15 11:15' },
 ];
 
-const mockDeletionRequests = [
-  { id: 1, userId: 4, username: 'atc1', name: 'Mike Wilson', role: 'ATC', requestTime: '2024-01-15 14:30' },
-  { id: 2, userId: 5, username: 'apoc2', name: 'Emily Davis', role: 'APOC', requestTime: '2024-01-15 15:45' },
-];
-
 const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
   notifCount, hasNewNotif, notifOpen, liveAlerts,
-  onNotifClick, onNotifClose
+  onNotifClick, onNotifClose, ...navExtras
 }) => {
   const [users, setUsers] = useState([]);
-  const [deletionRequests, setDeletionRequests] = useState(mockDeletionRequests);
+  const [deletionRequests, setDeletionRequests] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showEditUserModal, setShowEditUserModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [pendingRequestId, setPendingRequestId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -352,6 +287,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
   // Fetch users from backend
   useEffect(() => {
     fetchUsers();
+    fetchDeletionRequests();
   }, []);
 
   const fetchUsers = async () => {
@@ -371,8 +307,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           username: user.username,
           email: user.email || '',
           role: user.role,
-          status: user.status || 'active', // Use status from backend
-          lastLogin: user.created_at ? new Date(user.created_at).toLocaleString() : 'Never'
+          status: user.status || 'active',
+          lastLogin: user.last_login ? new Date(user.last_login).toLocaleString() : 'Never'
         }));
         setUsers(transformedUsers);
       }
@@ -380,6 +316,34 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
       console.error('Error fetching users:', error);
       // Fallback to mock data if API fails
       setUsers(mockUsers);
+    }
+  };
+
+  const fetchDeletionRequests = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API_BASE_URL}/auth/deletion-requests`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (response.data.success) {
+        // Transform backend data to match frontend format
+        const transformedRequests = response.data.requests.map(row => ({
+          id: row.id,
+          userId: row.user_id,
+          name: row.name,
+          username: row.username,
+          role: row.role,
+          requestTime: new Date(row.requested_at).toLocaleString()
+        }));
+        setDeletionRequests(transformedRequests);
+      }
+    } catch (error) {
+      console.error('Error fetching deletion requests:', error);
+      // Set to empty array instead of mock data on error
+      setDeletionRequests([]);
     }
   };
 
@@ -397,7 +361,6 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     
     const passwordError = validatePassword(newUser.password);
     if (passwordError) errors.password = passwordError;
-
     if (Object.keys(errors).length > 0) {
       setValidationErrors(errors);
       setIsLoading(false);
@@ -518,7 +481,6 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
       const passwordError = validatePassword(editUser.password, true);
       if (passwordError) errors.password = passwordError;
     }
-
     if (Object.keys(errors).length > 0) {
       setValidationErrors(errors);
       setIsLoading(false);
@@ -614,13 +576,32 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
       );
 
       if (response.data.success) {
+        // If this was from a deletion request, approve it
+        if (pendingRequestId) {
+          try {
+            await axios.delete(
+              `${API_BASE_URL}/auth/deletion-requests/${pendingRequestId}`,
+              {
+                data: { action: 'approve' },
+                headers: {
+                  Authorization: `Bearer ${token}`
+                }
+              }
+            );
+          } catch (err) {
+            console.warn('Failed to mark deletion request as approved (non-blocking):', err);
+          }
+        }
+
         // Remove user from local state immediately for better UX
         setUsers(prev => prev.filter(user => user.id !== selectedUser.id));
         setDeletionRequests(prev => prev.filter(req => req.userId !== selectedUser.id));
         setShowDeleteModal(false);
         setSelectedUser(null);
+        setPendingRequestId(null);
         // Also refresh from backend to ensure consistency
         fetchUsers();
+        fetchDeletionRequests();
       }
     } catch (err) {
       console.error('Delete user error:', err);
@@ -654,6 +635,34 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     }
   };
 
+  const rejectDeletionRequest = async () => {
+    if (!pendingRequestId) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(
+        `${API_BASE_URL}/auth/deletion-requests/${pendingRequestId}`,
+        {
+          data: { action: 'reject' },
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      // Remove the request from the list
+      setDeletionRequests(prev => prev.filter(req => req.id !== pendingRequestId));
+      setShowDeleteModal(false);
+      setSelectedUser(null);
+      setPendingRequestId(null);
+      alert('Deletion request has been rejected.');
+      fetchDeletionRequests();
+    } catch (err) {
+      console.error('Reject deletion request error:', err);
+      alert(err.response?.data?.message || 'Failed to reject deletion request. Please try again.');
+    }
+  };
+
   const handleToggleStatus = async (userId) => {
     const user = users.find(u => u.id === userId);
     if (!user) return;
@@ -683,15 +692,6 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     }
   };
 
-  const handleNotificationClick = (request) => {
-    const user = users.find(u => u.id === request.userId);
-    if (user) {
-      setSelectedUser(user);
-      setShowDeleteModal(true);
-    }
-    setShowNotifications(false);
-  };
-
   const roles = ['All', 'Admin', 'APOC', 'AOC', 'ATC'];
   const statuses = ['All', 'active', 'inactive'];
 
@@ -710,15 +710,17 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick}
           onNotifClose={onNotifClose}
+          {...navExtras}
         />
       <MainContent>
         <ContentArea>
           <HeaderRow>
-            <Title>User Management</Title>
+            <div style={{ width: 94, visibility: 'hidden' }} />
+            <Title style={{ textAlign: 'center' }}>User Management</Title>
             <AddUserButton onClick={() => setShowAddUserModal(true)}>+ Add User</AddUserButton>
           </HeaderRow>
           
-          <TopBar>
+          <TopBar data-pending-deletion-requests={deletionRequests.length}>
             <Search 
               placeholder="Search users by name, username, or email..." 
               value={searchQuery} 
@@ -730,31 +732,6 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               {statuses.map(status => <option key={status} value={status}>{status === 'All' ? 'All Statuses' : status}</option>)}
             </Select>
-            <div style={{ position: 'relative' }}>
-              <NotificationBell onClick={() => setShowNotifications(!showNotifications)}>
-                🔔
-                {deletionRequests.length > 0 && <NotificationDot />}
-              </NotificationBell>
-              <NotificationDropdown show={showNotifications}>
-                {deletionRequests.length === 0 ? (
-                  <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
-                    No pending deletion requests
-                  </div>
-                ) : (
-                  deletionRequests.map(request => (
-                    <NotificationItem key={request.id} onClick={() => handleNotificationClick(request)}>
-                      <NotificationTitle>Delete User Request</NotificationTitle>
-                      <NotificationSubtitle>
-                        {request.name} ({request.username}) - {request.role}
-                      </NotificationSubtitle>
-                      <NotificationSubtitle>
-                        Requested: {request.requestTime}
-                      </NotificationSubtitle>
-                    </NotificationItem>
-                  ))
-                )}
-              </NotificationDropdown>
-            </div>
           </TopBar>
           
           <Card>
@@ -818,7 +795,14 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
               </span>
             </div>
             <ModalActions>
-              <Button onClick={() => setShowDeleteModal(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setShowDeleteModal(false);
+                setSelectedUser(null);
+                setPendingRequestId(null);
+              }}>Cancel</Button>
+              {pendingRequestId && (
+                <Button onClick={rejectDeletionRequest}>Reject Request</Button>
+              )}
               <Button danger onClick={confirmDeleteUser}>Delete User</Button>
             </ModalActions>
           </ModalCard>

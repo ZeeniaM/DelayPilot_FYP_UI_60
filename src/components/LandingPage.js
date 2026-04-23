@@ -542,8 +542,8 @@ const LandingPage = ({ onGoToLogin }) => {
           {[
             { n: '01', title: 'Live Data Ingestion', desc: 'Weather from Open-Meteo, flight schedules from Aerodatabox FIDS, and carrier updates — all refreshed every 30 minutes.' },
             { n: '02', title: 'Feature Engineering', desc: 'Raw data is transformed into 40+ engineered features: weather codes, reactionary signals, congestion indices, and more.' },
-            { n: '03', title: 'ML Prediction', desc: 'Three CatBoost models output delay probability (≥15 min, ≥30 min) and estimated delay magnitude for every flight.' },
-            { n: '04', title: 'Operator Dashboard', desc: 'Airport staff see real-time delay risk, cause attribution, mitigation tools, and KPI reporting — all in one platform.' },
+            { n: '03', title: 'ML Prediction', desc: 'Three CatBoost models output delay probabilities (≥15 min, ≥30 min) and estimated delay magnitude for every flight.' },
+            { n: '04', title: 'Operator Dashboard', desc: 'Airport staff see real-time delay risk, cause attribution, mitigation tool, and KPI reporting — all in one platform.' },
           ].map(s => (
             <div key={s.n} className="dp-step-card" style={S.stepCard}>
               <div style={S.stepNum}>{s.n}</div>
@@ -564,7 +564,7 @@ const LandingPage = ({ onGoToLogin }) => {
             <div style={S.sectionLabel}>Passenger Tool</div>
             <h2 style={{ ...S.sectionTitle, textAlign: 'center' }}>Check Your Flight</h2>
             <p style={{ ...S.sectionSub, maxWidth: 480, margin: '0 auto', textAlign: 'center' }}>
-              Enter your flight number to get real-time status and delay probability
+              Enter your flight number to get real-time status and delay probabilities
               from our prediction system.
             </p>
           </div>
@@ -657,7 +657,7 @@ const LandingPage = ({ onGoToLogin }) => {
               onClick={handleSearch}
               disabled={loading}
             >
-              {loading ? 'Checking…' : 'Check Delay Risk →'}
+              {loading ? 'Checking…' : 'Check Delay Risk'}
             </button>
 
             {error && (
@@ -1029,7 +1029,7 @@ const LandingPage = ({ onGoToLogin }) => {
               </h3>
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)', lineHeight: 1.7, margin: 0 }}>
                 Access live KPIs, delay cause attribution, simulation tools,
-                and mitigation boards — designed for MUC operational staff.
+                and mitigation boards — designed for MUC Airport Operational staff.
               </p>
             </div>
 
@@ -1053,7 +1053,7 @@ const LandingPage = ({ onGoToLogin }) => {
               style={{ ...{ background: 'linear-gradient(135deg, #00A86B 0%, #00C896 100%)', color: '#ffffff', border: 'none', borderRadius: 8, padding: '13px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer', letterSpacing: 0.3, boxShadow: '0 4px 16px rgba(0,168,107,0.35)', position: 'relative', width: '100%', fontFamily: "'Outfit', sans-serif" } }}
               onClick={onGoToLogin}
             >
-              Access Operator Dashboard →
+              Access Operator Dashboard
             </button>
           </div>{/* end right col */}
 
@@ -1064,7 +1064,7 @@ const LandingPage = ({ onGoToLogin }) => {
       <footer style={S.footer}>
         <div style={S.footerLogo}>✈ DelayPilot</div>
         <div style={S.footerText}>Munich Airport · Flight Delay Prediction System</div>
-        <div style={S.footerText}>FYP 2025 · All data is live and model-generated</div>
+        <div style={S.footerText}>FYP 2025 · All data is live. Credit: AeroDataBox</div>
       </footer>
 
     </div>

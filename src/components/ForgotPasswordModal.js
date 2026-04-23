@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import styled from 'styled-components';
+import API_BASE_URL from '../config/api';
 
 const ModalOverlay = styled.div`
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
@@ -17,24 +15,19 @@ const ModalOverlay = styled.div`
 
 const ModalContainer = styled.div`
   background: #ffffff;
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  padding: 32px;
+  padding: 28px;
   width: 100%;
-  max-width: 400px;
+  max-width: 440px;
   border: 1px solid rgba(0, 0, 0, 0.05);
   position: relative;
-
-  @media (max-width: 480px) {
-    padding: 28px 24px;
-    max-width: 350px;
-  }
 `;
 
 const CloseButton = styled.button`
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 14px;
+  right: 14px;
   background: none;
   border: none;
   font-size: 24px;
@@ -46,7 +39,6 @@ const CloseButton = styled.button`
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  transition: all 0.2s ease;
 
   &:hover {
     background: rgba(0, 0, 0, 0.05);
@@ -55,23 +47,23 @@ const CloseButton = styled.button`
 `;
 
 const ModalHeader = styled.h2`
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 600;
   color: #333333;
-  margin-bottom: 8px;
+  margin: 0 0 8px;
 `;
 
 const ModalText = styled.p`
-  font-size: 16px;
+  font-size: 14px;
   color: #666666;
-  margin-bottom: 24px;
+  margin: 0 0 20px;
   line-height: 1.5;
 `;
 
 const Form = styled.form`
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 `;
 
 const InputGroup = styled.div`
@@ -81,108 +73,169 @@ const InputGroup = styled.div`
 `;
 
 const Label = styled.label`
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: #333333;
 `;
 
 const Input = styled.input`
-  padding: 12px 16px;
+  padding: 11px 12px;
   border: 1px solid #e1e5e9;
   border-radius: 8px;
-  font-size: 16px;
-  background: #ffffff;
+  font-size: 14px;
+  background: ${props => props.readOnly ? '#f8fafc' : '#ffffff'};
   color: #333333;
-  transition: all 0.2s ease;
 
   &:focus {
     outline: none;
     border-color: #1A4B8F;
-    box-shadow: 0 0 0 3px rgba(63, 128, 219, 0.1);
-  }
-
-  &::placeholder {
-    color: #999999;
+    box-shadow: 0 0 0 3px rgba(26, 75, 143, 0.1);
   }
 `;
 
 const SendButton = styled.button`
-  padding: 14px 24px;
-  background: linear-gradient(135deg, #00A86B 0%, #00C896 100%);
+  padding: 12px 18px;
+  background: #1A4B8F;
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 16px rgba(0, 168, 107, 0.3);
 
-  &:hover {
-    background: linear-gradient(135deg, rgb(219, 140, 56) 0%, rgb(232, 191, 76) 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(212, 165, 116, 0.4);
-  }
-
-  &:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 8px rgba(212, 165, 116, 0.3);
+  &:hover:not(:disabled) {
+    background: #0f3a73;
   }
 
   &:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    transform: none;
-    box-shadow: 0 4px 16px rgba(0, 168, 107, 0.2);
   }
 `;
 
-const SuccessMessage = styled.div`
-  padding: 16px;
-  background: rgba(0, 168, 107, 0.1);
-  border: 1px solid rgba(0, 168, 107, 0.3);
+const Message = styled.div`
+  padding: 12px;
   border-radius: 8px;
-  color: var(--secondary-color);
-  font-size: 14px;
-  text-align: center;
-  margin-top: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-
-  &::before {
-    content: '✓';
-    font-weight: bold;
-    font-size: 16px;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    background: rgba(0, 168, 107, 0.2);
-    border-color: rgba(0, 168, 107, 0.4);
-  }
+  font-size: 13px;
+  line-height: 1.45;
+  background: ${props => props.error ? '#fee2e2' : '#dcfce7'};
+  color: ${props => props.error ? '#991b1b' : '#166534'};
 `;
+
+const CodeBox = styled.div`
+  padding: 12px;
+  border-radius: 8px;
+  background: #eef6ff;
+  border: 1px solid #bfdbfe;
+  color: #1A4B8F;
+  font-size: 13px;
+  line-height: 1.5;
+`;
+
+const Code = styled.span`
+  display: inline-block;
+  font-family: Consolas, monospace;
+  font-weight: 800;
+  letter-spacing: 1px;
+  background: white;
+  border-radius: 6px;
+  padding: 3px 7px;
+  margin: 0 3px;
+`;
+
+const Strength = styled.div`
+  font-size: 12px;
+  font-weight: 700;
+  color: ${props => props.level === 'Strong' ? '#166534' : props.level === 'Medium' ? '#b45309' : '#991b1b'};
+`;
+
+const getPasswordStrength = (password) => {
+  if (!password) return '';
+  const hasLength = password.length >= 8;
+  const hasLetter = /[a-zA-Z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSpecial = /[^a-zA-Z0-9]/.test(password);
+  const score = [hasLength, hasLetter, hasNumber, hasSpecial].filter(Boolean).length;
+  if (score >= 4 && password.length >= 10) return 'Strong';
+  if (score >= 3) return 'Medium';
+  return 'Weak';
+};
 
 const ForgotPasswordModal = ({ onClose }) => {
+  const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
-  const handleSubmit = async (e) => {
+  const strength = useMemo(() => getPasswordStrength(newPassword), [newPassword]);
+
+  const handleRequestReset = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      console.log('Password reset request for:', email);
+    setError('');
+    setMessage('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Failed to request reset code');
+      }
+
+      setMessage(data.message);
+      if (data.reset_code) {
+        setResetCode(data.reset_code);
+        setUsername(data.username || '');
+        setStep(2);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to request reset code');
+    } finally {
       setIsLoading(false);
-      setShowSuccess(true);
-      
-      // Auto close modal after 3 seconds
-      setTimeout(() => {
-        onClose();
-      }, 3000);
-    }, 1000);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError('');
+    setMessage('');
+
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirm password do not match');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, token: resetCode, newPassword })
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Failed to reset password');
+      }
+
+      setMessage(data.message);
+      setTimeout(() => onClose(), 2000);
+    } catch (err) {
+      setError(err.message || 'Failed to reset password');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleOverlayClick = (e) => {
@@ -195,14 +248,19 @@ const ForgotPasswordModal = ({ onClose }) => {
     <ModalOverlay onClick={handleOverlayClick}>
       <ModalContainer>
         <CloseButton onClick={onClose}>×</CloseButton>
-        
+
         <ModalHeader>Reset Password</ModalHeader>
         <ModalText>
-          Enter your registered email to receive a password reset link.
+          {step === 1
+            ? 'Enter your registered email to generate a reset code.'
+            : 'Use the reset code below to set a new password.'}
         </ModalText>
-        
-        {!showSuccess ? (
-          <Form onSubmit={handleSubmit}>
+
+        {error && <Message error>{error}</Message>}
+        {message && !error && <Message>{message}</Message>}
+
+        {step === 1 ? (
+          <Form onSubmit={handleRequestReset} style={{ marginTop: 16 }}>
             <InputGroup>
               <Label htmlFor="email">Email Address</Label>
               <Input
@@ -214,15 +272,60 @@ const ForgotPasswordModal = ({ onClose }) => {
                 required
               />
             </InputGroup>
-            
+
             <SendButton type="submit" disabled={isLoading}>
-              {isLoading ? 'Sending...' : 'Send Reset Link'}
+              {isLoading ? 'Generating...' : 'Get Reset Code'}
             </SendButton>
           </Form>
         ) : (
-          <SuccessMessage>
-            Password reset link has been sent to your email.
-          </SuccessMessage>
+          <>
+            <CodeBox style={{ marginTop: 16 }}>
+              Your reset code is: <Code>{resetCode}</Code> (valid for 15 minutes)
+              {username && <div>Account username: <strong>{username}</strong></div>}
+            </CodeBox>
+
+            <Form onSubmit={handleResetPassword} style={{ marginTop: 16 }}>
+              <InputGroup>
+                <Label htmlFor="username">Username</Label>
+                <Input id="username" value={username} readOnly />
+              </InputGroup>
+              <InputGroup>
+                <Label htmlFor="resetCode">Reset Code</Label>
+                <Input
+                  id="resetCode"
+                  value={resetCode}
+                  onChange={(e) => setResetCode(e.target.value.toUpperCase())}
+                  required
+                />
+              </InputGroup>
+              <InputGroup>
+                <Label htmlFor="newPassword">New Password</Label>
+                <Input
+                  type="password"
+                  id="newPassword"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 8 characters, letters and numbers"
+                  required
+                />
+                {strength && <Strength level={strength}>Strength: {strength}</Strength>}
+              </InputGroup>
+              <InputGroup>
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  type="password"
+                  id="confirmPassword"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                />
+              </InputGroup>
+
+              <SendButton type="submit" disabled={isLoading}>
+                {isLoading ? 'Resetting...' : 'Reset Password'}
+              </SendButton>
+            </Form>
+          </>
         )}
       </ModalContainer>
     </ModalOverlay>

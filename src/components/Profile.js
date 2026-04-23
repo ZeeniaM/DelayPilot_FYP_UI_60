@@ -12,52 +12,66 @@ const Container = styled.div`
 const Content = styled.div`
   max-width: 1200px;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: 18px 20px;
 `;
 
 const Card = styled.div`
   background: white;
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  padding: 32px;
-  margin-bottom: 24px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+`;
+
+const HeaderRow = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+  margin-bottom: 14px;
 `;
 
 const Title = styled.h2`
   font-size: 24px;
   font-weight: 600;
   color: #1A4B8F;
-  margin: 0 0 24px 0;
+  margin: 0;
 `;
 
 const SectionTitle = styled.h3`
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #333333;
-  margin: 0 0 16px 0;
+  margin: 0 0 12px 0;
 `;
 
 const InfoGrid = styled.div`
   display: grid;
   grid-template-columns: 150px 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 0;
 
   @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-    gap: 8px;
+    grid-template-columns: 120px 1fr;
   }
 `;
 
 const Label = styled.div`
+  min-height: 36px;
+  display: flex;
+  align-items: center;
   font-size: 14px;
   font-weight: 500;
   color: #666666;
+  border-bottom: 1px solid #eef1f4;
 `;
 
 const Value = styled.div`
+  min-height: 36px;
+  display: flex;
+  align-items: center;
   font-size: 14px;
   color: #333333;
+  border-bottom: 1px solid #eef1f4;
 `;
 
 const Form = styled.form`
@@ -133,6 +147,76 @@ const Button = styled.button`
   }
 `;
 
+const DangerButton = styled(Button)`
+  background: #d32f2f;
+
+  &:hover:not(:disabled) {
+    background: #b71c1c;
+  }
+`;
+
+const DeletionNotice = styled.div`
+  padding: 16px;
+  background: #fff3e0;
+  border-left: 4px solid #ff6f00;
+  border-radius: 8px;
+  color: #e65100;
+  font-size: 14px;
+  line-height: 1.6;
+`;
+
+const DeletionWarning = styled.div`
+  padding: 16px;
+  background: #ffebee;
+  border-radius: 8px;
+  color: #c62828;
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+`;
+
+const PermissionsTable = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0;
+
+  th, td {
+    height: 28px;
+    padding: 4px 8px;
+    text-align: left;
+    border-bottom: 1px solid #e0e0e0;
+    font-size: 12px;
+  }
+
+  th {
+    background: #f5f5f5;
+    font-weight: 600;
+    color: #333333;
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+`;
+
+const AccessBadge = styled.span`
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: ${props => {
+    if (props.level === 'full') return '#c8e6c9';
+    if (props.level === 'view') return '#b3e5fc';
+    return '#ffcccc';
+  }};
+  color: ${props => {
+    if (props.level === 'full') return '#2e7d32';
+    if (props.level === 'view') return '#01579b';
+    return '#c62828';
+  }};
+`;
+
 const LoadingText = styled.div`
   text-align: center;
   padding: 40px;
@@ -140,9 +224,24 @@ const LoadingText = styled.div`
   font-size: 14px;
 `;
 
+const PasswordHeader = styled.button`
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #333333;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+`;
+
 const Profile = ({ userRole, userName, onLogout, activeTab,
   onTabChange, notifCount = 0, hasNewNotif = false, notifOpen = false,
-  liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard
+  liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard,
+  ...navExtras
 }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -155,10 +254,18 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordErrors, setPasswordErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+
+  // Account deletion state
+  const [deletionRequested, setDeletionRequested] = useState(false);
+  const [deletionLoading, setDeletionLoading] = useState(false);
 
   useEffect(() => {
     fetchProfile();
-  }, []);
+    if (userRole !== 'Admin') {
+      checkDeletionRequestStatus();
+    }
+  }, [userRole]);
 
   const fetchProfile = async () => {
     try {
@@ -177,6 +284,64 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
       setError('Failed to load profile. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkDeletionRequestStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get('http://localhost:5000/api/auth/deletion-request/status', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (response.data.success) {
+        setDeletionRequested(response.data.hasPending);
+      }
+    } catch (error) {
+      console.error('Error checking deletion request status:', error);
+    }
+  };
+
+  const handleDeletionRequest = async () => {
+    const confirmed = window.confirm(
+      'Are you sure you want to request account deletion? An admin will review this request.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletionLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post(
+        'http://localhost:5000/api/auth/deletion-request',
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      if (response.data.success) {
+        setDeletionRequested(true);
+        setSuccess('Deletion request submitted. An administrator will review it shortly.');
+      }
+    } catch (error) {
+      if (error.response?.status === 409) {
+        setDeletionRequested(true);
+        setSuccess('You already have a pending deletion request.');
+      } else {
+        setError(error.response?.data?.message || 'Failed to submit deletion request. Please try again.');
+      }
+    } finally {
+      setDeletionLoading(false);
     }
   };
 
@@ -303,6 +468,7 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
           liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick}
           onNotifClose={onNotifClose}
+          {...navExtras}
         />
         <Content>
           <LoadingText>Loading profile...</LoadingText>
@@ -324,91 +490,215 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
         notifOpen={notifOpen} liveAlerts={liveAlerts || []}
         onNotifClick={onNotifClick} onNotifClose={onNotifClose}
         onAlertDismiss={onAlertDismiss} onAlertAddToBoard={onAlertAddToBoard}
+        {...navExtras}
       />
       <Content>
+        <HeaderRow>
+          <div style={{ width: 120, visibility: 'hidden' }} />
+          <Title style={{ textAlign: 'center' }}>Profile</Title>
+          <div style={{ width: 120, visibility: 'hidden' }} />
+        </HeaderRow>
+
         <Card>
-          <Title>Profile Details</Title>
+          <SectionTitle>Profile Details</SectionTitle>
           <InfoGrid>
-            <Label>Name:</Label>
+            <Label>Name</Label>
             <Value>{profile?.name || 'N/A'}</Value>
             
-            <Label>Username:</Label>
+            <Label>Username</Label>
             <Value>{profile?.username || 'N/A'}</Value>
             
-            <Label>Role:</Label>
+            <Label>Role</Label>
             <Value>{profile?.role || 'N/A'}</Value>
-            
-            <Label>Email:</Label>
+
+            <Label>Email</Label>
             <Value>{profile?.email || 'N/A'}</Value>
             
-            <Label>Joined Date:</Label>
+            <Label>Created</Label>
             <Value>{formatDate(profile?.created_at)}</Value>
           </InfoGrid>
         </Card>
 
         <Card>
-          <SectionTitle>Change Password</SectionTitle>
-          {error && <ErrorMessage style={{ marginBottom: '16px', padding: '12px 16px', background: '#ffebee', borderRadius: '8px' }}>{error}</ErrorMessage>}
-          {success && <SuccessMessage>{success}</SuccessMessage>}
-          
-          <Form onSubmit={handleSubmit}>
-            <FormGroup>
-              <FormLabel>Current Password</FormLabel>
-              <FormInput
-                type="password"
-                name="currentPassword"
-                value={currentPassword}
-                onChange={handlePasswordChange}
-                placeholder="Enter current password"
-                required
-              />
-            </FormGroup>
-
-            <FormGroup>
-              <FormLabel>New Password</FormLabel>
-              <FormInput
-                type="password"
-                name="newPassword"
-                value={newPassword}
-                onChange={handlePasswordChange}
-                placeholder="Enter new password (min 8 characters, letters and numbers)"
-                required
-              />
-              {passwordErrors.newPassword && (
-                <ErrorMessage>{passwordErrors.newPassword}</ErrorMessage>
+          <SectionTitle>My Permissions</SectionTitle>
+          <PermissionsTable>
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>Access Level</th>
+              </tr>
+            </thead>
+            <tbody>
+              {userRole === 'APOC' || userRole === 'AOC' ? (
+                <>
+                  <tr>
+                    <td>Flights Overview</td>
+                    <td><AccessBadge level="full">View + Add to Board</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Simulation Tool</td>
+                    <td><AccessBadge level="full">Full access (run simulations)</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Mitigation Tracker Board</td>
+                    <td><AccessBadge level="full">Full access (create, edit, close cases)</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Comments & Chat</td>
+                    <td><AccessBadge level="full">Post and view comments</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>User Management</td>
+                    <td><AccessBadge level="none">No access</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>System Settings</td>
+                    <td><AccessBadge level="none">No access</AccessBadge></td>
+                  </tr>
+                </>
+              ) : userRole === 'ATC' ? (
+                <>
+                  <tr>
+                    <td>Flights Overview</td>
+                    <td><AccessBadge level="view">View only</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Simulation Tool</td>
+                    <td><AccessBadge level="view">View only (cannot run)</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Mitigation Tracker Board</td>
+                    <td><AccessBadge level="view">View only (cannot edit cases)</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Comments & Chat</td>
+                    <td><AccessBadge level="view">View only</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>User Management</td>
+                    <td><AccessBadge level="none">No access</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>System Settings</td>
+                    <td><AccessBadge level="none">No access</AccessBadge></td>
+                  </tr>
+                </>
+              ) : userRole === 'Admin' ? (
+                <>
+                  <tr>
+                    <td>User Management</td>
+                    <td><AccessBadge level="full">Full access</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>System Settings</td>
+                    <td><AccessBadge level="full">Full access</AccessBadge></td>
+                  </tr>
+                  <tr>
+                    <td>Flight Operations</td>
+                    <td><AccessBadge level="none">No access (operational modules)</AccessBadge></td>
+                  </tr>
+                </>
+              ) : (
+                <tr>
+                  <td colSpan="2">No permissions configured for this role.</td>
+                </tr>
               )}
-            </FormGroup>
-
-            <FormGroup>
-              <FormLabel>Confirm Password</FormLabel>
-              <FormInput
-                type="password"
-                name="confirmPassword"
-                value={confirmPassword}
-                onChange={handlePasswordChange}
-                placeholder="Confirm new password"
-                required
-              />
-              {passwordErrors.confirmPassword && (
-                <ErrorMessage>{passwordErrors.confirmPassword}</ErrorMessage>
-              )}
-            </FormGroup>
-
-            <Button
-              type="submit"
-              disabled={
-                isSubmitting ||
-                !currentPassword ||
-                !newPassword ||
-                !confirmPassword ||
-                passwordErrors.newPassword ||
-                passwordErrors.confirmPassword
-              }
-            >
-              {isSubmitting ? 'Updating...' : 'Update Password'}
-            </Button>
-          </Form>
+            </tbody>
+          </PermissionsTable>
         </Card>
+
+        <Card>
+          <PasswordHeader type="button" onClick={() => setShowPasswordForm(prev => !prev)}>
+            <span>Change Password {showPasswordForm ? '▲' : '▼'}</span>
+          </PasswordHeader>
+          {showPasswordForm && (
+            <>
+              {error && <ErrorMessage style={{ marginBottom: '16px', padding: '12px 16px', background: '#ffebee', borderRadius: '8px', marginTop: 16 }}>{error}</ErrorMessage>}
+              {success && <SuccessMessage style={{ marginTop: 16 }}>{success}</SuccessMessage>}
+
+              <Form onSubmit={handleSubmit} style={{ marginTop: 16 }}>
+                <FormGroup>
+                  <FormLabel>Current Password</FormLabel>
+                  <FormInput
+                    type="password"
+                    name="currentPassword"
+                    value={currentPassword}
+                    onChange={handlePasswordChange}
+                    placeholder="Enter current password"
+                    required
+                  />
+                </FormGroup>
+
+                <FormGroup>
+                  <FormLabel>New Password</FormLabel>
+                  <FormInput
+                    type="password"
+                    name="newPassword"
+                    value={newPassword}
+                    onChange={handlePasswordChange}
+                    placeholder="Enter new password (min 8 characters, letters and numbers)"
+                    required
+                  />
+                  {passwordErrors.newPassword && (
+                    <ErrorMessage>{passwordErrors.newPassword}</ErrorMessage>
+                  )}
+                </FormGroup>
+
+                <FormGroup>
+                  <FormLabel>Confirm Password</FormLabel>
+                  <FormInput
+                    type="password"
+                    name="confirmPassword"
+                    value={confirmPassword}
+                    onChange={handlePasswordChange}
+                    placeholder="Confirm new password"
+                    required
+                  />
+                  {passwordErrors.confirmPassword && (
+                    <ErrorMessage>{passwordErrors.confirmPassword}</ErrorMessage>
+                  )}
+                </FormGroup>
+
+                <Button
+                  type="submit"
+                  disabled={
+                    isSubmitting ||
+                    !currentPassword ||
+                    !newPassword ||
+                    !confirmPassword ||
+                    passwordErrors.newPassword ||
+                    passwordErrors.confirmPassword
+                  }
+                >
+                  {isSubmitting ? 'Updating...' : 'Update Password'}
+                </Button>
+              </Form>
+            </>
+          )}
+        </Card>
+
+        {userRole !== 'Admin' && (
+          <Card>
+            <SectionTitle>Account Deletion</SectionTitle>
+            {deletionRequested ? (
+              <DeletionNotice>
+                Your deletion request is pending admin review. You will be logged out once it is processed.
+              </DeletionNotice>
+            ) : (
+              <>
+                <DeletionWarning>
+                  Once approved by an administrator, your account will be permanently removed. This cannot be undone.
+                </DeletionWarning>
+                <DangerButton
+                  onClick={handleDeletionRequest}
+                  disabled={deletionLoading}
+                >
+                  {deletionLoading ? 'Submitting...' : 'Request Account Deletion'}
+                </DangerButton>
+              </>
+            )}
+          </Card>
+        )}
       </Content>
     </Container>
     </PageLayout>

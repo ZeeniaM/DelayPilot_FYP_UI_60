@@ -25,7 +25,7 @@ const FALLBACK_KPI = {
   onTimePerformance: 85.1,
 };
 
-const KPICards = ({ loading = false, onRefresh, liveKPIs = null }) => {
+const KPICards = ({ loading = false, onRefresh, liveKPIs = null, liveFlights = null, liveWeather = null, userName = '' }) => {
   const [reportOpen, setReportOpen] = useState(false);
 
   const isLive = !!liveKPIs;
@@ -145,7 +145,8 @@ const KPICards = ({ loading = false, onRefresh, liveKPIs = null }) => {
           delayedFlights:    kpi.delayedFlights,
           averageDelay:      kpi.averageDelay,
           onTimePerformance: kpi.onTimePerformance,
-        }}}
+        }, liveFlights, liveWeather}}
+        userName={userName}
       />
     </KPIContainer>
   );

@@ -20,6 +20,23 @@ router.get('/health', async (req, res) => {
   }
 });
 
+// GET /api/predictions/pipeline-logs
+router.get('/pipeline-logs', async (req, res) => {
+  try {
+    const { data } = await axios.get(`${FASTAPI}/pipeline-logs`, { timeout: 8000 });
+    res.json(data);
+  } catch (err) {
+    res.json({
+      logs: [],
+      health: {
+        last_ran: null,
+        running: false,
+        last_error: 'Pipeline server not reachable'
+      }
+    });
+  }
+});
+
 // GET /api/predictions/flights?date=2026-03-07
 router.get('/flights', async (req, res) => {
   try {

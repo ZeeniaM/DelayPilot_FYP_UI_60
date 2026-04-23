@@ -58,7 +58,7 @@ const opStatusLabel = (s) => {
 // ── Component ────────────────────────────────────────────────────
 const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
-  onAlertDismiss, onAlertAddToBoard
+  onAlertDismiss, onAlertAddToBoard, ...navExtras
 }) => {
   const [flights,           setFlights]           = useState([]);
   const [loading,           setLoading]           = useState(false);
@@ -158,7 +158,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
       await createCase({
         flight_number: f.flightNo,
         sched_utc: f.sched_utc,
-        airline_code: f.airline_code,
+        airline_code: f.airlineCode || f.airline_iata || null,
         route: f.route,
         predicted_delay_min: f.delay_min || f.ml_minutes_ui,
         risk_level: f.status === 'Major Delay' ? 'high' : f.status === 'Minor Delay' ? 'medium' : 'low',
@@ -192,6 +192,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
           onNotifClose={onNotifClose}
           onAlertDismiss={onAlertDismiss}
           onAlertAddToBoard={onAlertAddToBoard}
+          {...navExtras}
         />
 
         <MainContent>

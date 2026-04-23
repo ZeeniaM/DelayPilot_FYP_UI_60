@@ -37,6 +37,7 @@ const Dashboard = ({
   onAlertDismiss, onAlertAddToBoard,
   refreshKey = 0, onRefreshRequest,
   onAlertsUpdate,   // App.js passes handleAlertsMerge here
+  ...navExtras
 }) => {
   const [liveFlights, setLiveFlights] = useState(null);
   const [liveWeather, setLiveWeather] = useState(null);
@@ -93,6 +94,7 @@ const Dashboard = ({
           onNotifClose={onNotifClose}
           onAlertDismiss={onAlertDismiss}
           onAlertAddToBoard={onAlertAddToBoard}
+          {...navExtras}
         />
         <MainContent>
           <ContentArea>
@@ -100,6 +102,9 @@ const Dashboard = ({
               loading={loading}
               onRefresh={onRefreshRequest}
               liveKPIs={liveKPIs}
+              liveFlights={liveFlights}
+              liveWeather={liveWeather}
+              userName={userName}
             />
             <VisualAnalytics liveFlights={liveFlights} />
             <FlightsTable liveFlights={liveFlights} />

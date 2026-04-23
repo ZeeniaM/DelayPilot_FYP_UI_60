@@ -15,6 +15,7 @@ import {
 } from '../styles/components.styles';
 import { fetchFlights, simulateFlight } from '../services/predictionService';
 import styled from 'styled-components';
+import API_BASE_URL from '../config/api';
 
 /* ── Layout — panels fill viewport height, left panel scrolls internally ── */
 const Panels = styled.div`
@@ -257,6 +258,7 @@ const SimulationPage = ({
   notifCount = 0, hasNewNotif = false, notifOpen = false,
   liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard,
   simulationResult, onSimulationResult,
+  ...navExtras
 }) => {
   const [allFlights,     setAllFlights]     = useState([]);
   const [searchQuery,    setSearchQuery]    = useState('');
@@ -276,9 +278,36 @@ const SimulationPage = ({
   const [running,  setRunning]  = useState(false);
   const [blocked,  setBlocked]  = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [rolePerms, setRolePerms] = useState(null);
 
   useEffect(() => {
     fetchFlights().then(f => { if (f) setAllFlights(f); });
+  }, []);
+
+  // Fetch role permissions on mount and keep them fresh while the user is logged in.
+  useEffect(() => {
+    const fetchPermissions = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/auth/settings`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.settings) {
+            const rolePerms = data.settings.find(s => s.key === 'role_permissions');
+            if (rolePerms) {
+              setRolePerms(JSON.parse(rolePerms.value));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching permissions:', error);
+      }
+    };
+    fetchPermissions();
+    const permissionsInterval = setInterval(fetchPermissions, 5 * 60 * 1000);
+    return () => clearInterval(permissionsInterval);
   }, []);
 
   const searchResults = useMemo(() => {
@@ -362,6 +391,7 @@ const SimulationPage = ({
           notifOpen={notifOpen} liveAlerts={liveAlerts || []}
           onNotifClick={onNotifClick} onNotifClose={onNotifClose}
           onAlertDismiss={onAlertDismiss} onAlertAddToBoard={onAlertAddToBoard}
+          {...navExtras}
         />
         <MainContent>
           <ContentArea>
@@ -495,15 +525,25 @@ const SimulationPage = ({
 
                 {/* Sticky footer buttons */}
                 <ControlFooter>
-                  <SimRunButton
-                    onClick={handleRun}
-                    disabled={!selectedFlight || running || blocked}
-                    style={{ flex: 1 }}
-                  >
-                    {running ? 'Running…' : '▶  Run Simulation'}
-                  </SimRunButton>
-                  <Button onClick={handleReset} disabled={running}
-                    style={{ flexShrink: 0 }}>Reset</Button>
+                  {(() => {
+                    const canRunSim = rolePerms
+                      ? (rolePerms[userRole]?.simulationRun ?? (userRole !== 'ATC'))
+                      : (userRole !== 'ATC');
+                    return (
+                      <>
+                        <SimRunButton
+                          onClick={handleRun}
+                          disabled={!selectedFlight || running || blocked || !canRunSim}
+                          style={{ flex: 1 }}
+                          title={!canRunSim ? "Your role does not have simulation access" : ""}
+                        >
+                          {running ? 'Running…' : '▶  Run Simulation'}
+                        </SimRunButton>
+                        <Button onClick={handleReset} disabled={running}
+                          style={{ flexShrink: 0 }}>Reset</Button>
+                      </>
+                    );
+                  })()}
                 </ControlFooter>
               </ControlPanel>
 

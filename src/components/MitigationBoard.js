@@ -310,7 +310,7 @@ const ClearLink = styled.button`
 
 const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
-  onAlertDismiss, onAlertAddToBoard
+  onAlertDismiss, onAlertAddToBoard, ...navExtras
 }) => {
   const [query, setQuery] = useState('');
   const [activeAirlines, setActiveAirlines] = useState(new Set());
@@ -337,6 +337,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [liveFlights, setLiveFlights] = useState([]);
   const [propagationData, setPropagationData] = useState(null);
   const [propagationLoading, setPropagationLoading] = useState(false);
+  const [rolePerms, setRolePerms] = useState(null);
   const wsRef = useRef(null);
 
   const loadBoard = async () => {
@@ -362,6 +363,32 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     fetchFlights().then(flights => { if (flights) setLiveFlights(flights); }).catch(() => {});
   }, []);
 
+  // Fetch role permissions on mount and keep them fresh while the user is logged in.
+  useEffect(() => {
+    const fetchPermissions = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/auth/settings`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.settings) {
+            const rolePerms = data.settings.find(s => s.key === 'role_permissions');
+            if (rolePerms) {
+              setRolePerms(JSON.parse(rolePerms.value));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching permissions:', error);
+      }
+    };
+    fetchPermissions();
+    const permissionsInterval = setInterval(fetchPermissions, 5 * 60 * 1000);
+    return () => clearInterval(permissionsInterval);
+  }, []);
+
   const handleCreateTagEnter = (e) => {
     if (e.key === 'Enter') {
       const val = (e.target.value || '').trim();
@@ -380,7 +407,9 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const canEdit = userRole === 'APOC' || userRole === 'AOC';
+  const canEdit = rolePerms
+    ? (rolePerms[userRole]?.trackerEdit ?? (userRole === 'APOC' || userRole === 'AOC'))
+    : (userRole === 'APOC' || userRole === 'AOC');
   const canReassign = userRole === 'Admin';
 
   // Map API status to UI column key
@@ -751,6 +780,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
           onNotifClose={onNotifClose}
           onAlertDismiss={onAlertDismiss}
           onAlertAddToBoard={onAlertAddToBoard}
+          {...navExtras}
         />
       <MainContent>
         <ContentArea>

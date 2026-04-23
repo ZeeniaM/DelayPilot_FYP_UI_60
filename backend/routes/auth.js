@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { query } = require('../config/database');
 require('dotenv').config();
 
@@ -38,6 +39,125 @@ const validatePassword = (password) => {
   }
   return { valid: true };
 };
+
+// Forgot password endpoint (public)
+router.post('/forgot-password', async (req, res) => {
+  const genericMessage = 'If that email is registered, a reset code has been sent.';
+
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const result = await query(
+      'SELECT id, username, name FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: genericMessage
+      });
+    }
+
+    const user = result.rows[0];
+    const token = crypto.randomBytes(8).toString('hex').slice(0, 8).toUpperCase();
+
+    await query(
+      'DELETE FROM password_reset_tokens WHERE user_id = $1 AND used = false',
+      [user.id]
+    );
+
+    await query(
+      `INSERT INTO password_reset_tokens (user_id, token, expires_at)
+       VALUES ($1, $2, NOW() + INTERVAL '15 minutes')`,
+      [user.id, token]
+    );
+
+    res.json({
+      success: true,
+      message: genericMessage,
+      reset_code: token,
+      username: user.username
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Reset password endpoint (public)
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { username, token, newPassword } = req.body;
+
+    if (!username || !token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username, reset code, and new password are required'
+      });
+    }
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: passwordValidation.message
+      });
+    }
+
+    const tokenResult = await query(
+      `SELECT ptr.id, ptr.user_id
+       FROM password_reset_tokens ptr
+       JOIN users u ON u.id = ptr.user_id
+       WHERE u.username = $1
+         AND ptr.token = $2
+         AND ptr.used = false
+         AND ptr.expires_at > NOW()`,
+      [username, token.toUpperCase()]
+    );
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset code.'
+      });
+    }
+
+    const resetToken = tokenResult.rows[0];
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await query(
+      'UPDATE users SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [hashedPassword, resetToken.user_id]
+    );
+
+    await query(
+      'UPDATE password_reset_tokens SET used = true WHERE id = $1',
+      [resetToken.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully. You can now log in.'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
 
 // Login endpoint
 router.post('/login', async (req, res) => {
@@ -95,6 +215,30 @@ router.post('/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '24h' }
     );
+
+    // Track login in database (wrap in try/catch so it doesn't block login)
+    try {
+      const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+        || req.socket?.remoteAddress
+        || req.ip
+        || 'unknown';
+      const ip = rawIp === '::1' ? '127.0.0.1 (local)' : rawIp;
+
+      // Update last_login timestamp
+      await query(
+        'UPDATE users SET last_login = NOW() WHERE id = $1',
+        [user.id]
+      );
+
+      // Insert login log entry
+      await query(
+        'INSERT INTO login_logs (user_id, username, role, logged_in_at, ip_address) VALUES ($1, $2, $3, NOW(), $4)',
+        [user.id, user.username, user.role, ip]
+      );
+    } catch (logError) {
+      console.warn('⚠️ Failed to log login details:', logError.message);
+      // Don't throw - let login proceed even if logging fails
+    }
 
     // Return success response with user data (without password)
     res.json({
@@ -237,7 +381,7 @@ router.post('/register', verifyAdmin, async (req, res) => {
 router.get('/users', verifyAdmin, async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, username, role, email, name, status, created_at FROM users ORDER BY created_at DESC'
+      'SELECT id, username, role, email, name, status, created_at, last_login FROM users ORDER BY created_at DESC'
     );
 
     res.json({
@@ -337,7 +481,6 @@ router.put('/users/:id', verifyAdmin, async (req, res) => {
       updates.push(`name = $${paramCount++}`);
       values.push(name || null);
     }
-
     if (updates.length === 0) {
       return res.status(400).json({
         success: false,
@@ -489,7 +632,7 @@ router.get('/verify', async (req, res) => {
     
     // Get fresh user data from database
     const result = await query(
-      'SELECT id, username, role, email, name FROM users WHERE id = $1',
+      'SELECT id, username, role, email, name, status FROM users WHERE id = $1',
       [decoded.id]
     );
 
@@ -654,6 +797,243 @@ router.put('/profile/password', verifyUser, async (req, res) => {
   }
 });
 
+// Get login logs endpoint (admin only)
+router.get('/login-logs', verifyAdmin, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT ll.id, ll.username, ll.role, ll.logged_in_at, ll.ip_address, u.name
+      FROM login_logs ll
+      LEFT JOIN users u ON u.id = ll.user_id
+      WHERE ll.logged_in_at >= NOW() - INTERVAL '7 days'
+      ORDER BY ll.logged_in_at DESC
+      LIMIT 200
+    `);
+
+    res.json({
+      success: true,
+      logs: result.rows
+    });
+  } catch (error) {
+    console.error('Get login logs error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Submit account deletion request (any authenticated user)
+router.post('/deletion-request', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Check if user already has a pending deletion request
+    const pendingCheck = await query(
+      'SELECT id FROM deletion_requests WHERE user_id = $1 AND status = $2',
+      [userId, 'pending']
+    );
+
+    if (pendingCheck.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'A deletion request is already pending.'
+      });
+    }
+
+    // Get user details for the deletion request
+    const userResult = await query(
+      'SELECT id, username, name, role FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Insert deletion request
+    await query(
+      'INSERT INTO deletion_requests (user_id, username, name, role) VALUES ($1, $2, $3, $4)',
+      [user.id, user.username, user.name, user.role]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Deletion request submitted.'
+    });
+  } catch (error) {
+    console.error('Create deletion request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Get pending deletion requests (admin only)
+router.get('/deletion-requests', verifyAdmin, async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT * FROM deletion_requests WHERE status = $1 ORDER BY requested_at ASC',
+      ['pending']
+    );
+
+    res.json({
+      success: true,
+      requests: result.rows
+    });
+  } catch (error) {
+    console.error('Get deletion requests error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Check deletion request status (any authenticated user)
+router.get('/deletion-request/status', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await query(
+      'SELECT id FROM deletion_requests WHERE user_id = $1 AND status = $2',
+      [userId, 'pending']
+    );
+
+    res.json({
+      success: true,
+      hasPending: result.rows.length > 0
+    });
+  } catch (error) {
+    console.error('Get deletion request status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Handle deletion request (approve or reject) - admin only
+router.delete('/deletion-requests/:id', verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action } = req.body;
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Action must be either "approve" or "reject"'
+      });
+    }
+
+    // Get deletion request
+    const requestResult = await query(
+      'SELECT * FROM deletion_requests WHERE id = $1',
+      [id]
+    );
+
+    if (requestResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Deletion request not found'
+      });
+    }
+
+    const deletionRequest = requestResult.rows[0];
+
+    if (action === 'approve') {
+      // Update deletion request status
+      await query(
+        'UPDATE deletion_requests SET status = $1, handled_at = NOW(), handled_by = $2 WHERE id = $3',
+        ['approved', req.user.id, id]
+      );
+
+      // Delete the user
+      await query(
+        'DELETE FROM users WHERE id = $1',
+        [deletionRequest.user_id]
+      );
+
+      res.json({
+        success: true,
+        message: `Account deletion approved. User ${deletionRequest.username} has been deleted.`
+      });
+    } else if (action === 'reject') {
+      // Update deletion request status only
+      await query(
+        'UPDATE deletion_requests SET status = $1, handled_at = NOW(), handled_by = $2 WHERE id = $3',
+        ['rejected', req.user.id, id]
+      );
+
+      res.json({
+        success: true,
+        message: `Deletion request for ${deletionRequest.username} has been rejected.`
+      });
+    }
+  } catch (error) {
+    console.error('Handle deletion request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /settings — Get system settings (admin only)
+router.get('/settings', verifyAdmin, async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT key, value FROM system_settings'
+    );
+    res.json({
+      success: true,
+      settings: result.rows
+    });
+  } catch (error) {
+    console.error('Get settings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// PUT /settings — Update system settings (admin only)
+router.put('/settings', verifyAdmin, async (req, res) => {
+  try {
+    const { key, value } = req.body;
+
+    if (!key || value === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'key and value are required'
+      });
+    }
+
+    await query(
+      `INSERT INTO system_settings (key, value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = NOW()`,
+      [key, value]
+    );
+
+    res.json({
+      success: true,
+      message: 'Settings updated'
+    });
+  } catch (error) {
+    console.error('Update settings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
 module.exports = router;
-
-
