@@ -14,6 +14,7 @@ import {
 } from '../styles/components.styles';
 import {
   fetchFlights, fetchWeather, computeKPIs, postTrendSnapshot, fetchTrendHistory,
+  filterFlightsForAoc,
 } from '../services/predictionService';
 
 // Major Delay only — one entry per flight, carries full flight object
@@ -53,18 +54,23 @@ const Dashboard = ({
         fetchWeather(),
       ]);
       if (flights) {
-        setLiveFlights(flights);
-        setLiveKPIs(computeKPIs(flights));
+        const filteredFlights = filterFlightsForAoc(flights, userRole);
+        setLiveFlights(filteredFlights);
+        setLiveKPIs(computeKPIs(filteredFlights));
         // Merge (not replace) alerts in App.js store
-        onAlertsUpdate && onAlertsUpdate(buildAlerts(flights));
-        postTrendSnapshot(flights);
+        onAlertsUpdate && onAlertsUpdate(buildAlerts(filteredFlights));
+        postTrendSnapshot(filteredFlights);
       }
       if (weather) setLiveWeather(weather);
-      fetchTrendHistory().then(setTrendHistory).catch(() => {});
+      if (userRole === 'AOC') {
+        setTrendHistory([]);
+      } else {
+        fetchTrendHistory().then(setTrendHistory).catch(() => {});
+      }
     } finally {
       setLoading(false);
     }
-  }, [onAlertsUpdate]);
+  }, [onAlertsUpdate, userRole]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -115,6 +121,29 @@ const Dashboard = ({
         />
         <MainContent>
           <ContentArea>
+            {userRole === 'AOC' && (() => {
+              try {
+                const user = JSON.parse(localStorage.getItem('user') || '{}');
+                return user.airline ? (
+                  <div style={{
+                    fontSize: 12,
+                    color: '#64748b',
+                    fontWeight: 500,
+                    marginBottom: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}>
+                    <span style={{ fontSize: 14 }}>✈️</span>
+                    <span>
+                      Showing data for <strong style={{ color: '#1A4B8F' }}>{user.airline}</strong> only
+                    </span>
+                  </div>
+                ) : null;
+              } catch {
+                return null;
+              }
+            })()}
             <KPICards
               loading={loading}
               onRefresh={onRefreshRequest}

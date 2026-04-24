@@ -41,10 +41,86 @@ const AIRLINE_NAMES = {
   TP: 'TAP Portugal',   WX: 'CityJet',             AB: 'airberlin',
 };
 
+const AIRLINE_NAME_TO_IATA = {
+  Lufthansa: 'LH',
+  'Air France': 'AF',
+  'British Airways': 'BA',
+  Ryanair: 'FR',
+  easyJet: 'U2',
+  'Turkish Airlines': 'TK',
+  'Swiss International Air Lines': 'LX',
+  'Austrian Airlines': 'OS',
+  Eurowings: 'EW',
+  KLM: 'KL',
+  Iberia: 'IB',
+  'ITA Airways': 'AZ',
+  Finnair: 'AY',
+  'SAS Scandinavian Airlines': 'SK',
+  'TAP Air Portugal': 'TP',
+  'LOT Polish Airlines': 'LO',
+  'Wizz Air': 'W6',
+  Vueling: 'VY',
+  Condor: 'DE',
+  'Brussels Airlines': 'SN',
+  'Croatia Airlines': 'OU',
+  'Air Serbia': 'JU',
+  Swiss: 'LX',
+  SAS: 'SK',
+  'TAP Portugal': 'TP',
+};
+
 export const getAirlineName = (iata) => {
   if (!iata) return 'Unknown';
   const code = iata.trim().toUpperCase();
   return AIRLINE_NAMES[code] || code;
+};
+
+export const getAocAirlineIata = () => {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    if (user.role !== 'AOC' || !user.airline) return null;
+    return AIRLINE_NAME_TO_IATA[user.airline] || null;
+  } catch {
+    return null;
+  }
+};
+
+export const filterFlightsForAoc = (flights, userRole) => {
+  if (userRole !== 'AOC') return flights;
+  const iata = getAocAirlineIata();
+  if (!iata) return flights;
+  return flights.filter(f =>
+    f.airlineCode?.toUpperCase() === iata.toUpperCase()
+  );
+};
+
+export const filterCasesForAoc = (cases, userRole) => {
+  if (userRole !== 'AOC') return cases;
+  const iata = getAocAirlineIata();
+  if (!iata) return cases;
+
+  return cases.filter(c => {
+    if (c.airline_code && c.airline_code.trim() !== '') {
+      return c.airline_code.toUpperCase() === iata.toUpperCase();
+    }
+
+    if (c.airline && c.airline !== '—') {
+      try {
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        return c.airline.toLowerCase().includes(user.airline?.toLowerCase() || '__none__');
+      } catch {
+        return false;
+      }
+    }
+
+    if (c.flight_number) {
+      const prefix = c.flight_number.replace(/[^A-Za-z]/g, '').toUpperCase();
+      const derivedIata = prefix.substring(0, 2);
+      return derivedIata === iata.toUpperCase();
+    }
+
+    return true;
+  });
 };
 
 // ── ICAO → short airport label ───────────────────────────────────

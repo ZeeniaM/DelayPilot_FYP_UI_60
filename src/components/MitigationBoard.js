@@ -10,7 +10,7 @@ import {
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
 import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, permanentDeleteCase, getComments, addComment, deleteComment, toggleReaction } from '../services/mitigationService';
-import { fetchFlights, fetchPropagation } from '../services/predictionService';
+import { fetchFlights, fetchPropagation, filterFlightsForAoc, filterCasesForAoc } from '../services/predictionService';
 import API_BASE_URL from '../config/api';
 
 const WS_URL = API_BASE_URL.replace(/^http/, 'ws').replace(/\/api$/, '');
@@ -349,6 +349,10 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
   const currentUser = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), []);
   const currentUserId = currentUser.id;
+  const boardFlights = useMemo(
+    () => filterFlightsForAoc(liveFlights || [], userRole),
+    [liveFlights, userRole]
+  );
 
   const loadBoard = async () => {
     setLoading(true);
@@ -499,13 +503,23 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     };
   });
 
+  const displayCases = useMemo(
+    () => filterCasesForAoc(normalizedCases, userRole),
+    [normalizedCases, userRole]
+  );
+
+  const displayClosedCases = useMemo(
+    () => filterCasesForAoc(closedCases, userRole),
+    [closedCases, userRole]
+  );
+
   const filtered = useMemo(() => {
-    return normalizedCases.filter(c =>
+    return displayCases.filter(c =>
       (query === '' || c.flightNo.toLowerCase().includes(query.toLowerCase()) || c.airline.toLowerCase().includes(query.toLowerCase())) &&
       (activeAirlines.size === 0 || activeAirlines.has(c.airline)) &&
       (activeSeverities.size === 0 || activeSeverities.has(c.severity))
     );
-  }, [normalizedCases, query, activeAirlines, activeSeverities]);
+  }, [displayCases, query, activeAirlines, activeSeverities]);
 
   const columns = [
     { key: 'identified', title: 'Delay Noted' },
@@ -529,7 +543,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     if (!canEdit) return;
     e.preventDefault();
     if (!dragging) return;
-    const card = normalizedCases.find(c => c.id === dragging);
+    const card = displayCases.find(c => c.id === dragging);
     if (!card || card.column === colKey) { setDragging(null); return; }
     setPendingMove({ id: dragging, from: card.column, to: colKey });
     setDragging(null);
@@ -851,7 +865,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     }
   };
 
-  const distinctAirlines = Array.from(new Set(normalizedCases.map(c => c.airline))).filter(a => a !== '—');
+  const distinctAirlines = Array.from(new Set(displayCases.map(c => c.airline))).filter(a => a !== '—');
   const hasMultipleAirlines = distinctAirlines.length > 1;
 
   return (
@@ -879,6 +893,29 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
           <div style={{ textAlign:'center', padding:'18px 0 10px' }}>
             <Title style={{ display:'inline-block', margin:0 }}>Mitigation Tracker Board</Title>
           </div>
+          {userRole === 'AOC' && (() => {
+            try {
+              const user = JSON.parse(localStorage.getItem('user') || '{}');
+              return user.airline ? (
+                <div style={{
+                  fontSize: 12,
+                  color: '#64748b',
+                  fontWeight: 500,
+                  marginBottom: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}>
+                  <span style={{ fontSize: 14 }}>✈️</span>
+                  <span>
+                    Showing cases for <strong style={{ color: '#1A4B8F' }}>{user.airline}</strong> only
+                  </span>
+                </div>
+              ) : null;
+            } catch {
+              return null;
+            }
+          })()}
           <TopBar>
             <Search placeholder="Search flights or airlines..." value={query} onChange={(e) => setQuery(e.target.value)} />
             
@@ -1245,7 +1282,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         <ModalBackdrop>
           <ModalCard>
             <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Confirm Move</div>
-            <div style={{ color:'#333' }}>Move <strong>{normalizedCases.find(c => c.id === pendingMove.id)?.flightNo}</strong> from <em>{columns.find(c => c.key === pendingMove.from)?.title}</em> → <em>{columns.find(c => c.key === pendingMove.to)?.title}</em>?</div>
+            <div style={{ color:'#333' }}>Move <strong>{displayCases.find(c => c.id === pendingMove.id)?.flightNo}</strong> from <em>{columns.find(c => c.key === pendingMove.from)?.title}</em> → <em>{columns.find(c => c.key === pendingMove.to)?.title}</em>?</div>
             <ModalActions>
               <Button onClick={cancelMove}>Cancel</Button>
               <Button primary onClick={confirmMove}>Confirm</Button>
@@ -1295,7 +1332,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       )}
       <DetailDrawer isOpen={!!drawerCase}>
         {drawerCase && drawerMode === 'view' && (() => {
-          const base = normalizedCases.find(c => c.id === drawerCase.id) || drawerCase || {};
+          const base = displayCases.find(c => c.id === drawerCase.id) || drawerCase || {};
           const viewTags = drawerCase.tags || new Set();
           const schedDate = base.sched_utc ? new Date(base.sched_utc) : null;
           const estimatedDate = schedDate && base.delayMin
@@ -1537,7 +1574,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                   {flightQuery && (
                     <div style={{ border:'1px solid #eef1f4', borderRadius:8, maxHeight:160, overflow:'auto', background:'#fff' }}>
                       {(() => {
-                        const matches = liveFlights
+                        const matches = boardFlights
                           .filter(f => (f.flightNo || '').toLowerCase().includes(flightQuery.toLowerCase()))
                           .filter(f => f.status !== 'On Time' && f.status !== 'Early')
                           .slice(0, 20);
@@ -1660,11 +1697,11 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
         <ModalBackdrop onClick={() => setShowClosed(false)}>
           <ModalCard onClick={(e) => e.stopPropagation()}>
             <div style={{ fontWeight:800, color:'#333', marginBottom:8 }}>Closed Cases</div>
-            {closedCases.length === 0 ? (
+            {displayClosedCases.length === 0 ? (
               <div style={{ color:'#666' }}>No closed cases yet.</div>
             ) : (
               <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight: '60vh', overflow:'auto' }}>
-                {closedCases.map(cc => (
+                {displayClosedCases.map(cc => (
                   <div key={cc.id} style={{ padding:12, border:'1px solid #eef1f4', borderRadius:8, position:'relative' }}>
                     <button
                       title="Permanently delete"

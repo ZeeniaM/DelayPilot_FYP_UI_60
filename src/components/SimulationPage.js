@@ -13,7 +13,7 @@ import {
   Button, Spinner,
   tokens,
 } from '../styles/components.styles';
-import { fetchFlights, simulateFlight } from '../services/predictionService';
+import { fetchFlights, simulateFlight, filterFlightsForAoc } from '../services/predictionService';
 import styled from 'styled-components';
 import API_BASE_URL from '../config/api';
 
@@ -277,6 +277,11 @@ const SimulationPage = ({
     fetchFlights().then(f => { if (f) setAllFlights(f); });
   }, []);
 
+  const aocFlights = useMemo(
+    () => filterFlightsForAoc(allFlights || [], userRole),
+    [allFlights, userRole]
+  );
+
   // Fetch role permissions on mount and keep them fresh while the user is logged in.
   useEffect(() => {
     const fetchPermissions = async () => {
@@ -306,11 +311,11 @@ const SimulationPage = ({
   const searchResults = useMemo(() => {
     if (!searchQuery.trim() || selectedFlight) return [];
     const q = searchQuery.toLowerCase();
-    return allFlights
+    return aocFlights
       .filter(f => f.flightNo?.toLowerCase().includes(q) || f.airline?.toLowerCase().includes(q))
       .filter(f => f.status !== 'On Time')
       .slice(0, 10);
-  }, [allFlights, searchQuery, selectedFlight]);
+  }, [aocFlights, searchQuery, selectedFlight]);
 
   const isDeparture = selectedFlight?.movement === 'departure';
   const isArrival   = selectedFlight?.movement === 'arrival';

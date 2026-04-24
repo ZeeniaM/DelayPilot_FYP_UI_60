@@ -26,7 +26,7 @@ import {
   CauseBreakdown, CauseItem, CauseLabel, CauseBar, CauseFill, CausePercentage,
   DrawerBackdrop, LoadingText, ErrorText, Spinner,
 } from '../styles/components.styles';
-import { fetchFlights, fetchPropagation, formatTime } from '../services/predictionService';
+import { fetchFlights, fetchPropagation, formatTime, filterFlightsForAoc } from '../services/predictionService';
 
 // ── Global style: lock background to solid blue across all interactions ────
 // The background split (blue nav / white body) shifts on drawer open/close
@@ -53,6 +53,18 @@ const opStatusLabel = (s) => {
   const map = { Scheduled: 'Scheduled', EnRoute: 'En Route', Landed: 'Landed',
                 Cancelled: 'Cancelled', Diverted: 'Diverted', Unknown: 'Unknown' };
   return map[s] || s || 'Scheduled';
+};
+
+const STATUS_SORT_ORDER = {
+  'Major Delay': 0,
+  'Minor Delay': 1,
+  'On Time': 2,
+  Scheduled: 3,
+  'En Route': 4,
+  Early: 5,
+  Landed: 6,
+  Cancelled: 7,
+  Diverted: 8,
 };
 
 // ── Component ────────────────────────────────────────────────────
@@ -93,22 +105,13 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
 
   useEffect(() => { loadFlights(); }, [loadFlights, refreshKey]);
 
-  // Filtered view
-  // Status sort order: delayed first (severity desc), then on time, en route, early/landed last
-  const STATUS_SORT_ORDER = {
-    'Major Delay': 0,
-    'Minor Delay': 1,
-    'On Time':     2,
-    'Scheduled':   3,
-    'En Route':    4,
-    'Early':       5,
-    'Landed':      6,
-    'Cancelled':   7,
-    'Diverted':    8,
-  };
+  const displayFlights = useMemo(
+    () => filterFlightsForAoc(flights || [], userRole),
+    [flights, userRole]
+  );
 
   const filteredFlights = useMemo(() => {
-    const filtered = flights.filter(f => {
+    const filtered = displayFlights.filter(f => {
       const q = searchTerm.toLowerCase();
       const matchSearch    = f.flightNo.toLowerCase().includes(q) || f.airline.toLowerCase().includes(q);
       const matchStatus    = statusFilter    === 'All' || f.status    === statusFilter;
@@ -125,7 +128,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
       // Same status → sort by scheduled time ascending
       return (a.sched_utc || '').localeCompare(b.sched_utc || '');
     });
-  }, [flights, searchTerm, statusFilter, movementFilter]);
+  }, [displayFlights, searchTerm, statusFilter, movementFilter]);
 
   // Row click → open drawer with pre-computed data and fetch propagation
   const handleFlightClick = (flight) => {
