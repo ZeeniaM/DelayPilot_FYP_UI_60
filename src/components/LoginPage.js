@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
 import axios from 'axios';
 import ForgotPasswordModal from './ForgotPasswordModal';
@@ -206,11 +206,56 @@ const LoginPage = ({ onLogin, onGoBack }) => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  const [passwordAttempts, setPasswordAttempts] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState(null);
+  const [lockoutSecondsLeft, setLockoutSecondsLeft] = useState(0);
+  const [passwordLocked, setPasswordLocked] = useState(false);
   const [validationErrors, setValidationErrors] = useState({
     username: '',
     password: '',
     airline: ''
   });
+
+  useEffect(() => {
+    const stored = localStorage.getItem('login_lockout_until');
+    const storedAttempts = localStorage.getItem('login_password_attempts');
+    if (stored) {
+      const until = new Date(stored);
+      if (until > new Date()) {
+        setLockoutUntil(until);
+        setPasswordLocked(true);
+      } else {
+        localStorage.removeItem('login_lockout_until');
+        localStorage.removeItem('login_password_attempts');
+      }
+    }
+    if (storedAttempts) {
+      setPasswordAttempts(parseInt(storedAttempts, 10));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!lockoutUntil) return undefined;
+
+    const tick = () => {
+      const now = new Date();
+      const diff = Math.ceil((lockoutUntil - now) / 1000);
+      if (diff <= 0) {
+        setPasswordLocked(false);
+        setLockoutUntil(null);
+        setLockoutSecondsLeft(0);
+        setPasswordAttempts(0);
+        localStorage.removeItem('login_lockout_until');
+        localStorage.removeItem('login_password_attempts');
+      } else {
+        setLockoutSecondsLeft(diff);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
 
   const validateUsername = (username) => {
     if (username.length > 0 && username.length < 4) {
@@ -276,6 +321,10 @@ const LoginPage = ({ onLogin, onGoBack }) => {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+
+    if (passwordLocked) {
+      return;
+    }
     
     // Validate before submitting
     const usernameError = validateUsername(formData.username);
@@ -309,6 +358,13 @@ const LoginPage = ({ onLogin, onGoBack }) => {
         // Store token in localStorage
         localStorage.setItem('token', response.data.token);
         localStorage.setItem('user', JSON.stringify(response.data.user));
+        localStorage.removeItem('login_lockout_until');
+        localStorage.removeItem('login_password_attempts');
+        setPasswordAttempts(0);
+        setPasswordLocked(false);
+        setLockoutUntil(null);
+        setLockoutSecondsLeft(0);
+        setIsLoading(false);
         
         setSuccess('Login successful!');
         
@@ -325,15 +381,31 @@ const LoginPage = ({ onLogin, onGoBack }) => {
       }
     } catch (err) {
       console.error('Login error:', err);
-      // Handle specific auth errors without mentioning role
       if (err.response) {
-        if (err.response.status === 401) {
-          setError('Username, Password or Role is Invalid');
-        } else if (err.response.status === 403) {
-          // Show backend message for inactive accounts or forbidden access
-          setError(err.response.data?.message || 'Account is inactive. Please contact the administrator.');
+        if (err.response?.data?.errorType === 'WRONG_PASSWORD') {
+          const newAttempts = passwordAttempts + 1;
+          setPasswordAttempts(newAttempts);
+          localStorage.setItem('login_password_attempts', String(newAttempts));
+
+          if (newAttempts >= 3) {
+            const until = new Date(Date.now() + 15 * 1000);
+            setLockoutUntil(until);
+            setPasswordLocked(true);
+            localStorage.setItem('login_lockout_until', until.toISOString());
+            setError('Too many incorrect password attempts. Password input locked for 15 seconds.');
+          } else {
+            setError(`Incorrect password. Please try again. (${newAttempts}/3 attempts)`);
+          }
+        } else if (err.response?.data?.errorType === 'USER_NOT_FOUND') {
+          setError(err.response.data.message);
+          setPasswordAttempts(0);
+          localStorage.removeItem('login_password_attempts');
+        } else if (err.response?.data?.errorType === 'ROLE_MISMATCH') {
+          setError(err.response.data.message);
+        } else if (err.response?.data?.errorType === 'ACCOUNT_INACTIVE') {
+          setError(err.response.data.message);
         } else {
-          setError(err.response.data?.message || 'Failed to connect to server. Please check if the backend is running.');
+          setError(err.response?.data?.message || 'Login failed. Please try again.');
         }
       } else {
         let errorMessage;
@@ -410,8 +482,26 @@ const LoginPage = ({ onLogin, onGoBack }) => {
               placeholder="Enter your password"
               required
               hasError={!!validationErrors.password}
+              disabled={passwordLocked}
+              style={{
+                background: passwordLocked ? '#f3f4f6' : undefined,
+                cursor: passwordLocked ? 'not-allowed' : undefined,
+              }}
             />
             {validationErrors.password && <FieldError>{validationErrors.password}</FieldError>}
+            {passwordLocked && lockoutSecondsLeft > 0 && (
+              <div style={{
+                color: '#dc2626',
+                background: '#fef2f2',
+                border: '1px solid #fca5a5',
+                borderRadius: 6,
+                padding: '8px 12px',
+                fontSize: 13,
+                marginTop: 6,
+              }}>
+                🔒 Password input locked. Try again in {lockoutSecondsLeft} second{lockoutSecondsLeft !== 1 ? 's' : ''}.
+              </div>
+            )}
           </InputGroup>
 
           <InputGroup>
@@ -446,7 +536,7 @@ const LoginPage = ({ onLogin, onGoBack }) => {
             </InputGroup>
           )}
 
-          <LoginButton type="submit" disabled={isLoading || !isFormValid()}>
+          <LoginButton type="submit" disabled={isLoading || !isFormValid() || passwordLocked}>
             {isLoading ? 'Logging in...' : 'Login'}
           </LoginButton>
 

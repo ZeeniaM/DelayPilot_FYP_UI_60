@@ -162,86 +162,79 @@ router.post('/reset-password', async (req, res) => {
 // Login endpoint
 router.post('/login', async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, role, airline } = req.body;
 
-    // Validate input
     if (!username || !password || !role) {
       return res.status(400).json({
         success: false,
-        message: 'Username, password, and role are required'
+        message: 'Username, password, and role are required.'
       });
     }
 
-    // Find user in database
-    const result = await query(
-      'SELECT * FROM users WHERE username = $1 AND role = $2',
-      [username, role]
+    const userByUsername = await query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
     );
 
-    if (result.rows.length === 0) {
+    if (userByUsername.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: 'No account found with these credentials. The account may not exist or may have been removed.'
+        message: 'No account found with this username. The account may not exist or may have been removed.',
+        errorType: 'USER_NOT_FOUND'
       });
     }
 
-    const user = result.rows[0];
+    const userByRole = userByUsername.rows.filter(
+      u => u.role.toLowerCase() === role.toLowerCase()
+    );
 
-    // Check account status (inactive users cannot log in)
-    if (user.status && user.status !== 'active') {
+    if (userByRole.length === 0) {
       return res.status(401).json({
         success: false,
-        message: 'This account has been deactivated. Please contact the administrator.'
+        message: `Role "${role}" does not match this account. Please select the correct role.`,
+        errorType: 'ROLE_MISMATCH'
       });
     }
 
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const user = userByRole[0];
 
-    if (!isValidPassword) {
+    if (user.status !== 'active') {
       return res.status(401).json({
         success: false,
-        message: 'Incorrect password. Please try again.'
+        message: 'This account has been deactivated. Please contact the administrator.',
+        errorType: 'ACCOUNT_INACTIVE'
+      });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Incorrect password. Please try again.',
+        errorType: 'WRONG_PASSWORD'
       });
     }
 
     // Generate JWT token
     const token = jwt.sign(
-      {
-        id: user.id,
-        username: user.username,
-        role: user.role
-      },
+      { id: user.id, username: user.username, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     // Track login in database (wrap in try/catch so it doesn't block login)
     try {
-      const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
-        || req.socket?.remoteAddress
-        || req.ip
-        || 'unknown';
-      const ip = rawIp === '::1' ? '127.0.0.1 (local)' : rawIp;
-
-      // Update last_login timestamp
       await query(
-        'UPDATE users SET last_login = NOW() WHERE id = $1',
-        [user.id]
+        `INSERT INTO login_logs (user_id, username, role, logged_in_at)
+         VALUES ($1, $2, $3, NOW())`,
+        [user.id, user.username, user.role]
       );
-
-      // Insert login log entry
-      await query(
-        'INSERT INTO login_logs (user_id, username, role, logged_in_at, ip_address) VALUES ($1, $2, $3, NOW(), $4)',
-        [user.id, user.username, user.role, ip]
-      );
-    } catch (logError) {
-      console.warn('⚠️ Failed to log login details:', logError.message);
-      // Don't throw - let login proceed even if logging fails
+    } catch (logErr) {
+      console.warn('Login log insert failed (non-fatal):', logErr.message);
     }
 
-    // Return success response with user data (without password)
-    res.json({
+    return res.json({
       success: true,
       message: 'Login successful',
       token,
@@ -251,14 +244,15 @@ router.post('/login', async (req, res) => {
         role: user.role,
         email: user.email,
         name: user.name,
-        airline: user.airline
+        airline: user.airline,
+        status: user.status
       }
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error during login'
+      message: 'Internal server error. Please try again.'
     });
   }
 });
@@ -1094,3 +1088,4 @@ router.put('/settings', verifyAdmin, async (req, res) => {
 });
 
 module.exports = router;
+
