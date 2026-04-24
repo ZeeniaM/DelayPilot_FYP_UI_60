@@ -399,7 +399,12 @@ const LandingPage = ({ onGoToLogin }) => {
     // Load flight list for dropdown (no auth needed — public endpoint)
     api().get('/predictions/flights').then(res => {
       if (res.data && Array.isArray(res.data)) {
-        setFlights(res.data);
+        const sorted = [...res.data].sort((a, b) => {
+          const ta = a.sched_utc ? new Date(a.sched_utc).getTime() : 0;
+          const tb = b.sched_utc ? new Date(b.sched_utc).getTime() : 0;
+          return ta - tb;
+        });
+        setFlights(sorted);
       }
     }).catch(() => {}); // silent — dropdown is optional
   }, []);
@@ -409,7 +414,7 @@ const LandingPage = ({ onGoToLogin }) => {
     ? flights.filter(f =>
         f.number_raw?.toLowerCase().includes(query.toLowerCase()) ||
         (f.airline_iata && airlineName(f.airline_iata).toLowerCase().includes(query.toLowerCase()))
-      ).slice(0, 12)
+      ).slice(0, 20)
     : [];
 
   const handleSelect = (f) => {
@@ -644,7 +649,7 @@ const LandingPage = ({ onGoToLogin }) => {
                 }}
               >
                 <option value="">— Select a flight —</option>
-                {flights.slice(0, 80).map((f, i) => (
+                {flights.map((f, i) => (
                   <option key={i} value={JSON.stringify({ number_raw: f.number_raw, sched_utc: f.sched_utc })}>
                     {f.number_raw}  ·  {airlineName(f.airline_iata)}  ·  {f.movement === 'departure' ? '↑ DEP' : '↓ ARR'}  ·  {fmt(f.sched_utc)}
                   </option>

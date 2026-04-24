@@ -927,14 +927,14 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
                             {canEdit && prevCol && (
                               <button
                                 title={`← Move to ${prevTitle}`}
-                                style={{ border:'1px solid #d1d5db', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
+                                style={{ border:'1px solid #f9fafb', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
                                 onClick={(e) => { e.stopPropagation(); setPendingMove({ id: c.id, from: c.column, to: prevCol }); }}
                               >←</button>
                             )}
                             {canEdit && nextCol && (
                               <button
                                 title={`Move to ${nextTitle} →`}
-                                style={{ border:'1px solid #d1d5db', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
+                                style={{ border:'1px solid #f9fafb', background:'#f9fafb', borderRadius:5, width:22, height:22, cursor:'pointer', fontSize:13, padding:0, lineHeight:1, color:'#555' }}
                                 onClick={(e) => { e.stopPropagation(); setPendingMove({ id: c.id, from: c.column, to: nextCol }); }}
                               >→</button>
                             )}

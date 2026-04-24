@@ -20,15 +20,16 @@ import API_BASE_URL from '../config/api';
 /* ── Layout — panels fill viewport height, left panel scrolls internally ── */
 const Panels = styled.div`
   display: flex;
-  gap: 20px;
+  width: 100%;
+  gap: 14px;
   height: calc(100vh - 140px);
   min-height: 520px;
   @media (max-width: 960px) { flex-direction: column; height: auto; }
 `;
 
 const ControlPanel = styled.div`
-  flex: 0 0 380px;
-  min-width: 320px;
+  flex: 0 0 440px;
+  min-width: 380px;
   background: ${tokens.white};
   border: 1px solid ${tokens.borderLight};
   border-radius: ${tokens.radius};
@@ -56,11 +57,12 @@ const ControlFooter = styled.div`
 
 const ResultPanel = styled.div`
   flex: 1;
+  min-width: 0;
   background: ${tokens.white};
   border: 1px solid ${tokens.borderLight};
   border-radius: ${tokens.radius};
   box-shadow: ${tokens.shadow};
-  padding: 20px;
+  padding: 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -71,7 +73,7 @@ const ResultPanel = styled.div`
 
 /* ── Parameter atoms ──────────────────────────────────────────── */
 const SecHead = styled.div`
-  font-size: 10px; font-weight: 700; color: ${tokens.primary};
+  font-size: 11px; font-weight: 700; color: ${tokens.primary};
   text-transform: uppercase; letter-spacing: 0.8px;
   margin: 14px 0 8px; padding-bottom: 5px;
   border-bottom: 1px solid ${tokens.borderLight};
@@ -99,11 +101,11 @@ const SliderTop = styled.div`
 `;
 
 const SliderName = styled.span`
-  font-size: 11px; font-weight: 600; color: ${tokens.text};
+  font-size: 13px; font-weight: 600; color: ${tokens.text};
 `;
 
 const SliderVal = styled.span`
-  font-size: 12px; font-weight: 700;
+  font-size: 13px; font-weight: 700;
   color: ${p => p.overridden ? tokens.primary : tokens.textMuted};
 `;
 
@@ -124,7 +126,7 @@ const Track = styled.input`
 `;
 
 const BaselineHint = styled.span`
-  font-size: 10px; color: ${tokens.textMuted}; margin-top: 1px;
+  font-size: 11px; color: ${tokens.textMuted}; margin-top: 1px;
 `;
 
 const ResetX = styled.button`
@@ -137,7 +139,7 @@ const ResetX = styled.button`
 const FlightStrip = styled.div`
   background: ${tokens.primaryLight};
   border-radius: ${tokens.radiusSm};
-  padding: 8px 12px; margin-bottom: 10px; font-size: 12px;
+  padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
 `;
 
 const SearchDropdown = styled.div`
@@ -148,7 +150,7 @@ const SearchDropdown = styled.div`
 `;
 
 const SearchItem = styled.div`
-  padding: 8px 12px; cursor: pointer; font-size: 12px;
+  padding: 8px 12px; cursor: pointer; font-size: 13px;
   display: flex; justify-content: space-between;
   border-bottom: 1px solid #f1f3f4;
   &:hover { background: ${tokens.primaryLight}; }
@@ -167,14 +169,6 @@ const DisabledNote = styled.div`
   font-size: 11px; color: ${tokens.textMuted}; margin-bottom: 6px;
 `;
 
-const ProbBar = styled.div`
-  height: 5px; background: #e1e5e9; border-radius: 3px; overflow: hidden; margin-top: 5px;
-`;
-const ProbFill = styled.div`
-  height: 100%; border-radius: 3px; transition: width 0.4s ease;
-  width: ${p => p.pct}%;
-  background: ${p => p.pct > 50 ? tokens.red : p.pct > 25 ? tokens.amber : tokens.green};
-`;
 const RctCard = styled.div`
   background: ${tokens.white}; border: 1px solid ${tokens.borderLight};
   border-radius: ${tokens.radiusSm}; padding: 10px 12px; min-width: 130px;
@@ -188,14 +182,7 @@ const RctBadge = styled.span`
 const EmptyMsg = styled.div`
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: ${tokens.textMuted};
-  font-size: 13px; text-align: center; padding: 32px;
-`;
-const OverrideChips = styled.div`
-  display: flex; flex-wrap: wrap; gap: 5px;
-`;
-const Chip = styled.span`
-  background: ${tokens.primaryLight}; color: ${tokens.primary};
-  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  font-size: 14px; text-align: center; padding: 32px;
 `;
 
 /* ── WMO codes ────────────────────────────────────────────────── */
@@ -219,12 +206,12 @@ const WEATHER_CODES = [
 const pct      = (v, min, max) => Math.round(((v - min) / (max - min)) * 100);
 
 /* ── Slider component ────────────────────────────────────────── */
-const Slider = ({ label, unit, value, onChange, min, max, step, baseline, disabled }) => {
+const Slider = ({ label, unit, value, onChange, min, max, step, baseline, disabled, title }) => {
   const isOn = value !== null;
   const display = isOn ? value : (baseline ?? min);
   const fillPct = pct(display, min, max);
   return (
-    <SliderCell disabled={disabled}>
+    <SliderCell disabled={disabled} title={title}>
       <SliderTop>
         <SliderName>{label}</SliderName>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -258,6 +245,12 @@ const SimulationPage = ({
   notifCount = 0, hasNewNotif = false, notifOpen = false,
   liveAlerts = [], onNotifClick, onNotifClose, onAlertDismiss, onAlertAddToBoard,
   simulationResult, onSimulationResult,
+  persistedFlight,
+  onFlightChange,
+  persistedResult,
+  onResultChange,
+  persistedParams,
+  onParamsChange,
   ...navExtras
 }) => {
   const [allFlights,     setAllFlights]     = useState([]);
@@ -422,6 +415,7 @@ const SimulationPage = ({
                       onChange={e => { setSearchQuery(e.target.value); setSelectedFlight(null); onSimulationResult(null); }}
                       onFocus={() => setSearchFocused(true)}
                       onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+                      style={{ fontSize: 13 }}
                     />
                     {searchFocused && searchResults.length > 0 && (
                       <SearchDropdown>
@@ -462,7 +456,7 @@ const SimulationPage = ({
                   <SecHead>☁️ Weather (MUC)</SecHead>
 
                   <div style={{ marginBottom: 10 }}>
-                    <SimLabel style={{ fontSize: 11, marginBottom: 4 }}>
+                    <SimLabel style={{ fontSize: 14, marginBottom: 4 }}>
                       Condition
                       {B.weatherCode != null && (
                         <span style={{ color: tokens.textMuted, fontWeight: 400, marginLeft: 6 }}>
@@ -473,7 +467,7 @@ const SimulationPage = ({
                     <SimSelect
                       value={weatherCode ?? ''}
                       onChange={e => setWeatherCode(e.target.value === '' ? null : Number(e.target.value))}
-                      style={{ fontSize: 12, padding: '7px 10px' }}
+                      style={{ fontSize: 14, padding: '7px 10px' }}
                     >
                       <option value="">— Real data —</option>
                       {WEATHER_CODES.map(w => (
@@ -484,15 +478,19 @@ const SimulationPage = ({
 
                   <SliderGrid>
                     <Slider label="Wind Speed" unit=" km/h"
+                      title="Sustained wind at Munich airport. Strong winds (>25 km/h) activate delay risk flag."
                       value={windSpeed} onChange={setWindSpeed}
                       min={0} max={100} step={5} baseline={B.windSpeed} />
                     <Slider label="Wind Gusts" unit=" km/h"
+                      title="Gust speed. Values >40 km/h activate strong-gust flag used by the model."
                       value={windGusts} onChange={setWindGusts}
                       min={0} max={130} step={5} baseline={B.windGusts} />
                     <Slider label="Precipitation" unit=" mm"
+                      title="Rainfall in mm. Any value >0 activates precipitation flag."
                       value={precipitation} onChange={setPrecipitation}
                       min={0} max={20} step={1} baseline={B.precipitation} />
                     <Slider label="Visibility" unit=" km"
+                      title="Runway visibility in km. Lower values indicate fog/poor weather."
                       value={visibilityKm} onChange={setVisibilityKm}
                       min={0} max={30} step={0.5} baseline={B.visibilityKm} />
                   </SliderGrid>
@@ -504,6 +502,7 @@ const SimulationPage = ({
                   ) : (
                     <SliderGrid>
                       <Slider label="Prev. Aircraft Delay" unit=" min"
+                        title="Delay of this aircraft's previous flight. Drives reactionary/knock-on delay risk."
                         value={prevDelay} onChange={setPrevDelay}
                         min={0} max={120} step={5} baseline={B.prevDelay}
                         disabled={isArrival} />
@@ -511,14 +510,16 @@ const SimulationPage = ({
                   )}
 
                   {/* Congestion */}
-                  <SecHead>🚦 Congestion (±1h)</SecHead>
+                  <SecHead>🚦 Congestion (3h window)</SecHead>
                   <SliderGrid>
                     <Slider label="Arrivals" unit=" flights"
+                      title="Total arrivals at MUC in a 3-hour rolling window around this flight."
                       value={mucArr1h} onChange={setMucArr1h}
-                      min={0} max={60} step={1} baseline={B.mucArr1h} />
+                      min={0} max={120} step={5} baseline={B.mucArr1h} />
                     <Slider label="Departures" unit=" flights"
+                      title="Total departures at MUC in a 3-hour rolling window around this flight."
                       value={mucDep1h} onChange={setMucDep1h}
-                      min={0} max={60} step={1} baseline={B.mucDep1h} />
+                      min={0} max={120} step={5} baseline={B.mucDep1h} />
                   </SliderGrid>
 
                 </ControlScroll>
@@ -594,30 +595,6 @@ const SimulationPage = ({
                   const riskBg = s_combined >= 60 ? tokens.redBg : s_combined >= 35 ? tokens.amberBg : tokens.greenBg;
                   const delayColor = sDisplay >= 30 ? tokens.red : sDisplay >= 15 ? tokens.amber : tokens.green;
                   const majorRiskColor = s30 >= 40 ? tokens.red : s30 >= 20 ? tokens.amber : tokens.green;
-                  const weatherLabel = code => WEATHER_CODES.find(w => w.value === code)?.label || `Code ${code}`;
-                  const overrideLabels = {
-                    wind_speed_10m: 'Wind Speed',
-                    wind_gusts_10m: 'Wind Gusts',
-                    precipitation: 'Precipitation',
-                    visibility: 'Visibility',
-                    weather_code: 'Weather Condition',
-                    prev_delay_min_safe: 'Previous Aircraft Delay',
-                    muc_arr_1h: 'Arrival Traffic',
-                    muc_dep_1h: 'Departure Traffic',
-                  };
-                  const overrideUnits = {
-                    wind_speed_10m: ' km/h',
-                    wind_gusts_10m: ' km/h',
-                    precipitation: ' mm',
-                    visibility: ' m',
-                    prev_delay_min_safe: ' min',
-                    muc_arr_1h: ' flights',
-                    muc_dep_1h: ' flights',
-                  };
-                  const formatOverride = (key, value) => {
-                    if (key === 'weather_code') return `${overrideLabels[key]}: ${weatherLabel(value)}`;
-                    return `${overrideLabels[key] || key}: ${value}${overrideUnits[key] || ''}`;
-                  };
                   const flightLabel = selectedFlight?.flightNo || 'Selected flight';
                   const routeLabel = selectedFlight?.route || 'Route unavailable';
                   return (
@@ -641,33 +618,36 @@ const SimulationPage = ({
                             <div style={{ fontSize: 13, color: tokens.textMuted, marginTop: 4 }}>{routeLabel}</div>
                           </div>
                           <div style={{
-                            background: riskBg,
-                            color: riskColor,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            padding: '5px 12px',
-                            borderRadius: 999,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            flexWrap: 'wrap',
                           }}>
-                            {riskLabel}
+                            <span style={{
+                              background: riskBg,
+                              color: riskColor,
+                              fontWeight: 600,
+                              fontSize: 16,
+                              padding: '3px 10px',
+                              borderRadius: 999,
+                            }}>
+                              {riskLabel}
+                            </span>
                           </div>
                         </div>
 
                         <div style={{
                           textAlign: 'center',
                           marginTop: 18,
-                          fontSize: 32,
+                          fontSize: 36,
                           fontWeight: 800,
-                          color: delayColor,
+                          color: riskColor,
                           lineHeight: 1.15,
                         }}>
-                          {sDisplay > 0 ? `~${sDisplay} min estimated delay` : 'No delay predicted'}
+                          {s_combined}%
                         </div>
-
-                        <ProbBar style={{ marginTop: 18 }}>
-                          <ProbFill pct={s_combined} style={{ backgroundColor: riskColor }} />
-                        </ProbBar>
-                        <div style={{ fontSize: 11, color: tokens.textMuted, marginTop: 6 }}>
-                          {s_combined}% delay probability under simulated conditions
+                        <div style={{ fontSize: 12, color: tokens.textMuted, marginTop: 2, textAlign: 'center' }}>
+                          delay probability
                         </div>
                       </div>
 
@@ -678,32 +658,32 @@ const SimulationPage = ({
                         alignItems: 'stretch',
                       }}>
                         <div style={{
-                          background: tokens.white,
-                          border: `1px solid ${tokens.surfaceHover}`,
+                          background: 'rgb(254, 232, 255)',
+                          border: '1px solid rgb(200, 9, 238)',
                           borderRadius: tokens.radiusSm,
                           padding: 14,
                         }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: tokens.text, marginBottom: 10 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#6e097b', marginBottom: 10 }}>
                             Current Conditions
                           </div>
                           <div style={{ display: 'grid', gap: 8 }}>
                             <div
                               title={`${d15 >= 0 ? '+' : ''}${d15}pp short-delay change`}
-                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}
+                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}
                             >
-                              <span style={{ color: tokens.textMuted }}>Delay Risk</span>
-                              <strong>{b_combined}%</strong>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Delay Risk</span>
+                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{b_combined}%</strong>
                             </div>
                             <div
                               title={`${d30 >= 0 ? '+' : ''}${d30}pp major-delay change`}
-                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}
+                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}
                             >
-                              <span style={{ color: tokens.textMuted }}>Est. Delay</span>
-                              <strong>{bDisplay} min</strong>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Est. Delay</span>
+                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{bDisplay} min</strong>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
-                              <span style={{ color: tokens.textMuted }}>Major Risk</span>
-                              <strong>{b30}%</strong>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Major Risk</span>
+                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{b30}%</strong>
                             </div>
                           </div>
                         </div>
@@ -734,49 +714,36 @@ const SimulationPage = ({
                           borderRadius: tokens.radiusSm,
                           padding: 14,
                         }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: tokens.primary, marginBottom: 10 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: tokens.primary, marginBottom: 10 }}>
                             Simulated Conditions
                           </div>
                           <div style={{ display: 'grid', gap: 8 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
-                              <span style={{ color: tokens.textMuted }}>Delay Risk</span>
-                              <strong style={{ color: riskColor }}>{`${b_combined}% \u2192 ${s_combined}%`}</strong>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Delay Risk</span>
+                              <strong style={{ color: riskColor, fontSize: 16, fontWeight: 600 }}>{`${s_combined}%`}</strong>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
-                              <span style={{ color: tokens.textMuted }}>Est. Delay</span>
-                              <strong style={{ color: dMn > 0 ? tokens.red : dMn < 0 ? tokens.green : tokens.text }}>{`${bDisplay} min \u2192 ${sDisplay} min`}</strong>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Est. Delay</span>
+                              <strong style={{ color: dMn > 0 ? tokens.red : dMn < 0 ? tokens.green : tokens.text, fontSize: 16, fontWeight: 600 }}>{`${sDisplay} min`}</strong>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
-                              <span style={{ color: tokens.textMuted }}>Major Risk</span>
-                              <strong style={{ color: majorRiskColor }}>{`${b30}% \u2192 ${s30}%`}</strong>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
+                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Major Risk</span>
+                              <strong style={{ color: majorRiskColor, fontSize: 16, fontWeight: 600 }}>{`${s30}%`}</strong>
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      {simulationResult.overrides && Object.keys(simulationResult.overrides).length > 0 && (
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: tokens.text, marginBottom: 8 }}>
-                            What Was Changed
-                          </div>
-                          <OverrideChips>
-                            {Object.entries(simulationResult.overrides).map(([k, v]) => (
-                              <Chip key={k}>{formatOverride(k, v)}</Chip>
-                            ))}
-                          </OverrideChips>
-                        </div>
-                      )}
-
                       {Array.isArray(ri) && ri.length > 0 && (
                         <div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: tokens.text, marginBottom: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: tokens.text, marginBottom: 8 }}>
                             Downstream Reactionary Impact
                           </div>
                           <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
                             {ri.map((cf, i) => (
                               <RctCard key={i}>
-                                <div style={{ fontWeight: 700, color: tokens.primary, fontSize: 12, marginBottom: 2 }}>{cf.flight}</div>
-                                <div style={{ fontSize: 10, color: tokens.textMuted, marginBottom: 5 }}>
+                                <div style={{ fontWeight: 700, color: tokens.primary, fontSize: 13, marginBottom: 2 }}>{cf.flight}</div>
+                                <div style={{ fontSize: 12, color: tokens.textMuted, marginBottom: 5 }}>
                                   {cf.sched ? new Date(cf.sched).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '—'}
                                 </div>
                                 <RctBadge s={cf.severity}>+{cf.added_min} min</RctBadge>

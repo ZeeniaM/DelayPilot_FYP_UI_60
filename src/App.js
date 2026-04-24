@@ -31,6 +31,18 @@ function App() {
   const [boardRefreshTrigger, setBoardRefreshTrigger] = useState(0);
   const [usersRefreshTrigger, setUsersRefreshTrigger] = useState(0);
   const [simulationResult,  setSimulationResult]  = useState(null);
+  const [simSelectedFlight, setSimSelectedFlight] = useState(null);
+  const [simParams, setSimParams] = useState({
+    windSpeed: null,
+    windGusts: null,
+    precipitation: null,
+    visibilityKm: null,
+    weatherCode: null,
+    prevDelay: null,
+    mucArr1h: null,
+    mucDep1h: null,
+    searchQuery: '',
+  });
 
   // ── Persistent alert store ────────────────────────────────────
   // Map<flightNo → entry> lives in a ref so it is never lost across
@@ -161,6 +173,19 @@ function App() {
     setHasNew(false);
     setAdminDeletionRequests([]);
     setAdminHasNewRequests(false);
+    setSimulationResult(null);
+    setSimSelectedFlight(null);
+    setSimParams({
+      windSpeed: null,
+      windGusts: null,
+      precipitation: null,
+      visibilityKm: null,
+      weatherCode: null,
+      prevDelay: null,
+      mucArr1h: null,
+      mucDep1h: null,
+      searchQuery: '',
+    });
     setView(VIEW.LANDING);
     setUserName('');
     setActiveTab('Dashboard');
@@ -350,7 +375,7 @@ function App() {
           />
         );
       case 'Flights':          return <FlightsPage    {...navProps} />;
-      case 'Simulation':       return <SimulationPage {...navProps} />;
+      case 'Simulation':       return null;
       case 'Mitigation Board': return <MitigationBoard {...navProps} refreshTrigger={boardRefreshTrigger} />;
       case 'User Management':  return <UserManagement  {...navProps} refreshTrigger={usersRefreshTrigger} />;
       case 'Settings':         return <Settings        {...navProps} />;
@@ -383,7 +408,20 @@ function App() {
   return (
     <>
       <GlobalFonts />
-      <div className="App">{renderActivePage()}</div>
+      <div className="App">
+        {renderActivePage()}
+        <div style={{ display: activeTab === 'Simulation' ? 'block' : 'none' }}>
+          <SimulationPage
+            {...navProps}
+            persistedFlight={simSelectedFlight}
+            onFlightChange={setSimSelectedFlight}
+            persistedResult={simulationResult}
+            onResultChange={setSimulationResult}
+            persistedParams={simParams}
+            onParamsChange={setSimParams}
+          />
+        </div>
+      </div>
     </>
   );
 }
