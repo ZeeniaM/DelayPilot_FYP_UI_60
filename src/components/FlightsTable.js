@@ -9,7 +9,7 @@
  * ─────────────────────────────────────────────────────────────────
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   TableContainer, TableHeaderBar, TableTitle,
   Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell,
@@ -36,9 +36,15 @@ const getStatus = (f) => {
   return 'On Time';
 };
 
+const getRandomFlights = (flightsArray, count = 6) => {
+  if (!flightsArray || flightsArray.length === 0) return [];
+  const shuffled = [...flightsArray].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, count);
+};
+
 const FlightsTable = ({ liveFlights = null }) => {
-  // Use live data if available; show first 8 rows only
-  const flights = (liveFlights || MOCK_FLIGHTS).slice(0, 8);
+  const sourceFlights = liveFlights || MOCK_FLIGHTS;
+  const flights = useMemo(() => getRandomFlights(sourceFlights, 6), [sourceFlights]);
   const isLive  = !!liveFlights;
 
   return (

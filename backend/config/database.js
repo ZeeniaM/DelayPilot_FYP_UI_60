@@ -81,6 +81,11 @@ const initDatabase = async () => {
       )
     `);
 
+    // Add airline column if it doesn't exist (for existing databases)
+    await queryWithRetry(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS airline VARCHAR(100)
+    `);
+
     // Add name column if it doesn't exist (for existing databases)
     try {
       const nameColumnCheck = await queryWithRetry(`
@@ -355,6 +360,32 @@ const initDatabase = async () => {
     `);
 
     console.log('✅ Case_comments table ready');
+
+    // Add reply support to case_comments
+    await queryWithRetry(`
+      ALTER TABLE case_comments
+      ADD COLUMN IF NOT EXISTS parent_comment_id INTEGER
+        REFERENCES case_comments(id) ON DELETE CASCADE
+    `);
+
+    // ─────────────────────────────────────────────────────────────
+    // NEW TABLE: comment_reactions
+    // ─────────────────────────────────────────────────────────────
+    await queryWithRetry(`
+      CREATE TABLE IF NOT EXISTS comment_reactions (
+        id          SERIAL PRIMARY KEY,
+        comment_id  INTEGER NOT NULL REFERENCES case_comments(id) ON DELETE CASCADE,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji       VARCHAR(10) NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(comment_id, user_id, emoji)
+      )
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_reactions_comment_id
+        ON comment_reactions(comment_id)
+    `);
 
     // ─────────────────────────────────────────────────────────────
     // NEW TABLE: system_settings

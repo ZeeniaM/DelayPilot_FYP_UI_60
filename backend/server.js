@@ -79,14 +79,17 @@ const startServer = async () => {
     const rooms = new Map(); // Map<caseId: number, Set<WebSocket>>
 
     // Make broadcast available to Express route handlers via app.locals
-    app.locals.broadcastComment = (caseId, comment) => {
+    app.locals.broadcastToCase = (caseId, message) => {
       const room = rooms.get(Number(caseId));
       if (!room) return;
-      const msg = JSON.stringify({ type: 'comment', comment });
+      const msg = JSON.stringify(message);
       for (const client of room) {
         if (client.readyState === WebSocket.OPEN) client.send(msg);
       }
     };
+
+    app.locals.broadcastComment = (caseId, comment) =>
+      app.locals.broadcastToCase(caseId, { type: 'comment', comment });
 
     wss.on('connection', (ws) => {
       let authenticated = false;

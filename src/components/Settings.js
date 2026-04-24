@@ -303,11 +303,6 @@ const Timeline = styled.div`
   gap: 14px;
 `;
 
-const pulse = keyframes`
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.35); opacity: 0.55; }
-`;
-
 const TimelineItem = styled.div`
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);
@@ -320,8 +315,13 @@ const Dot = styled.span`
   height: 10px;
   border-radius: 50%;
   margin-top: 5px;
-  background: ${props => props.kind === 'error' ? '#dc2626' : props.kind === 'skipped' ? '#94a3b8' : (props.kind === 'running' || props.kind === 'info') ? '#f59e0b' : '#16a34a'};
-  animation: ${props => props.kind === 'running' ? pulse : 'none'} 1.2s ease-in-out infinite;
+  background: ${props =>
+    props.kind === 'success' ? '#22c55e' :
+    props.kind === 'error' ? '#ef4444' :
+    props.kind === 'running' ? '#f59e0b' :
+    props.kind === 'skipped' ? '#9ca3af' :
+    '#3b82f6'};
+  animation: none;
 `;
 
 const TimelineLabel = styled.div`

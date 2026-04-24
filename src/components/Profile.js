@@ -258,6 +258,9 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
 
   // Account deletion state
   const [deletionRequested, setDeletionRequested] = useState(false);
+  const [deletionRejected, setDeletionRejected] = useState(false);
+  const [rejectionBannerDismissed, setRejectionBannerDismissed] = useState(false);
+  const [showDeletionConfirmDialog, setShowDeletionConfirmDialog] = useState(false);
   const [deletionLoading, setDeletionLoading] = useState(false);
 
   useEffect(() => {
@@ -266,6 +269,12 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
       checkDeletionRequestStatus();
     }
   }, [userRole]);
+
+  useEffect(() => {
+    const userId = JSON.parse(localStorage.getItem('user') || '{}').id;
+    const dismissed = localStorage.getItem(`rejection_banner_dismissed_${userId}`);
+    if (dismissed === 'true') setRejectionBannerDismissed(true);
+  }, []);
 
   const fetchProfile = async () => {
     try {
@@ -298,24 +307,25 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
 
       if (response.data.success) {
         setDeletionRequested(response.data.hasPending);
+        setDeletionRejected(response.data.wasRejected ?? false);
       }
     } catch (error) {
       console.error('Error checking deletion request status:', error);
     }
   };
 
-  const handleDeletionRequest = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to request account deletion? An admin will review this request.'
-    );
+  const handleDeletionRequest = () => {
+    setShowDeletionConfirmDialog(true);
+  };
 
-    if (!confirmed) {
-      return;
-    }
-
+  const confirmDeletionRequest = async () => {
+    setShowDeletionConfirmDialog(false);
     setDeletionLoading(true);
     setError('');
     setSuccess('');
+    const userId = JSON.parse(localStorage.getItem('user') || '{}').id;
+    localStorage.removeItem(`rejection_banner_dismissed_${userId}`);
+    setRejectionBannerDismissed(false);
 
     try {
       const token = localStorage.getItem('token');
@@ -331,6 +341,7 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
 
       if (response.data.success) {
         setDeletionRequested(true);
+        setDeletionRejected(false);
         setSuccess('Deletion request submitted. An administrator will review it shortly.');
       }
     } catch (error) {
@@ -343,6 +354,12 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
     } finally {
       setDeletionLoading(false);
     }
+  };
+
+  const handleDismissRejectionBanner = () => {
+    const userId = JSON.parse(localStorage.getItem('user') || '{}').id;
+    localStorage.setItem(`rejection_banner_dismissed_${userId}`, 'true');
+    setRejectionBannerDismissed(true);
   };
 
   const validatePassword = (password) => {
@@ -680,14 +697,50 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
         {userRole !== 'Admin' && (
           <Card>
             <SectionTitle>Account Deletion</SectionTitle>
-            {deletionRequested ? (
+            {deletionRejected && !rejectionBannerDismissed && (
+              <div style={{
+                color: '#991b1b',
+                background: '#fef2f2',
+                border: '1px solid #fca5a5',
+                borderRadius: 8,
+                padding: '10px 14px',
+                marginBottom: 14,
+                fontSize: 13,
+                lineHeight: 1.5,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+              }}>
+                ⚠️ Your account deletion request has been rejected by the Admin.
+                You may submit a new request below if you still wish to delete your account.
+                <button
+                  onClick={handleDismissRejectionBanner}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#991b1b',
+                    fontSize: 16,
+                    marginLeft: 10,
+                    lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                  title="Dismiss"
+                >
+                  x
+                </button>
+              </div>
+            )}
+            {deletionRequested && !deletionRejected ? (
               <DeletionNotice>
-                Your deletion request is pending admin review. You will be logged out once it is processed.
+                Your deletion request is pending admin review.
+                You will be logged out once it is processed.
               </DeletionNotice>
             ) : (
               <>
                 <DeletionWarning>
-                  Once approved by an administrator, your account will be permanently removed. This cannot be undone.
+                  Once approved by an administrator, your account will be permanently
+                  removed. This cannot be undone.
                 </DeletionWarning>
                 <DangerButton
                   onClick={handleDeletionRequest}
@@ -698,6 +751,45 @@ const Profile = ({ userRole, userName, onLogout, activeTab,
               </>
             )}
           </Card>
+        )}
+        {showDeletionConfirmDialog && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{
+              background: '#fff', borderRadius: 12, padding: '28px 32px',
+              maxWidth: 400, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            }}>
+              <h3 style={{ margin: '0 0 10px', color: '#1f2937', fontSize: 17 }}>
+                Request Account Deletion
+              </h3>
+              <p style={{ color: '#4b5563', fontSize: 14, lineHeight: 1.6, margin: '0 0 22px' }}>
+                Are you sure you want to request account deletion?
+                An administrator will review your request. Once approved,
+                your account will be permanently removed and cannot be recovered.
+              </p>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setShowDeletionConfirmDialog(false)}
+                  style={{
+                    padding: '8px 20px', borderRadius: 7, border: '1px solid #d1d5db',
+                    background: '#f9fafb', color: '#374151', cursor: 'pointer', fontSize: 14,
+                  }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeletionRequest}
+                  style={{
+                    padding: '8px 20px', borderRadius: 7, border: 'none',
+                    background: '#dc2626', color: '#fff', cursor: 'pointer', fontSize: 14,
+                    fontWeight: 600,
+                  }}>
+                  Yes, Request Deletion
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </Content>
     </Container>

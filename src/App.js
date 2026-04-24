@@ -28,6 +28,8 @@ function App() {
   const [adminDeletionRequests, setAdminDeletionRequests] = useState([]);
   const [adminHasNewRequests, setAdminHasNewRequests] = useState(false);
   const [dashRefreshKey,    setDashRefreshKey]    = useState(0);
+  const [boardRefreshTrigger, setBoardRefreshTrigger] = useState(0);
+  const [usersRefreshTrigger, setUsersRefreshTrigger] = useState(0);
   const [simulationResult,  setSimulationResult]  = useState(null);
 
   // ── Persistent alert store ────────────────────────────────────
@@ -37,6 +39,7 @@ function App() {
   const storeRef  = useRef(new Map());   // flightNo → alertEntry
   const nextId    = useRef(1);
   const tokenValidationIntervalRef = useRef(null);
+  const seenRequestIdsRef = useRef(new Set());
   const [liveAlerts, setLiveAlerts] = useState([]);
 
   // Rebuild display array from the Map after every mutation
@@ -82,7 +85,7 @@ function App() {
   // Add to Board: mark isOnBoard and create a case in the DB
   // User sees button turn green immediately, navigates manually.
   // Also attempts to create the case in the mitigation database asynchronously
-  const handleAlertAddToBoard = useCallback((flightNo) => {
+  const handleAlertAddToBoard = useCallback(async (flightNo) => {
     const entry = storeRef.current.get(flightNo);
     if (entry) {
       storeRef.current.set(flightNo, { ...entry, isOnBoard: true });
@@ -92,7 +95,7 @@ function App() {
       if (entry.flight) {
         const flight = entry.flight;
         try {
-          createCase({
+          await createCase({
             flight_number: flight.flightNo,
             sched_utc: flight.sched_utc,
             airline_code: flight.airline_code,
@@ -101,9 +104,8 @@ function App() {
             risk_level: flight.status === 'Major Delay' ? 'high' : 'medium',
             likely_cause: flight.likelyCause || null,
             tagged_causes: flight.likelyCause ? [flight.likelyCause] : [],
-          }).catch(e => {
-            console.warn('Case creation from alert failed:', e);
           });
+          setBoardRefreshTrigger(prev => prev + 1);
         } catch (e) {
           console.warn('Case creation from alert error:', e);
         }
@@ -138,12 +140,11 @@ function App() {
           requestTime: row.requested_at ? new Date(row.requested_at).toLocaleString() : 'Unknown'
         }));
 
-        setAdminDeletionRequests(prev => {
-          if (mappedRequests.length > prev.length) {
-            setAdminHasNewRequests(true);
-          }
-          return mappedRequests;
-        });
+        const newUnseen = mappedRequests.filter(r => !seenRequestIdsRef.current.has(r.id));
+        mappedRequests.forEach(r => seenRequestIdsRef.current.add(r.id));
+
+        setAdminHasNewRequests(newUnseen.length > 0);
+        setAdminDeletionRequests(mappedRequests);
       }
     } catch (error) {
       // Polling should stay silent; NavigationBar will simply keep the last known state.
@@ -154,6 +155,7 @@ function App() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     storeRef.current.clear();
+    seenRequestIdsRef.current.clear();
     setLiveAlerts([]);
     setNotifOpen(false);
     setHasNew(false);
@@ -259,6 +261,45 @@ function App() {
     setAdminHasNewRequests(false);
   }, []);
 
+  const handleDeleteUser = useCallback(async (request) => {
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`${API_BASE_URL}/auth/users/${request.userId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await fetch(`${API_BASE_URL}/auth/deletion-requests/${request.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'approve' })
+      });
+      setAdminDeletionRequests(prev => prev.filter(r => r.id !== request.id));
+      setUsersRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      console.error('Delete user from alert failed:', err);
+      alert('Failed to delete user. Please try again.');
+    }
+  }, []);
+
+  const handleRejectRequest = useCallback(async (request) => {
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`${API_BASE_URL}/auth/deletion-requests/${request.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reject' })
+      });
+      setAdminDeletionRequests(prev => prev.filter(r => r.id !== request.id));
+    } catch (err) {
+      console.error('Reject deletion request failed:', err);
+      alert('Failed to reject request. Please try again.');
+    }
+  }, []);
+
+  const handleDismissRequest = useCallback((requestId) => {
+    setAdminDeletionRequests(prev => prev.filter(r => r.id !== requestId));
+  }, []);
+
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     setNotifOpen(false);
@@ -290,6 +331,9 @@ function App() {
     onAdminRequestsRead: handleAdminRequestsRead,
     onAlertDismiss:      handleAlertDismiss,
     onAlertAddToBoard:   handleAlertAddToBoard,
+    onDeleteUser:        handleDeleteUser,
+    onRejectRequest:     handleRejectRequest,
+    onDismissRequest:    handleDismissRequest,
     simulationResult,
     onSimulationResult:  handleSimulationResult,
   };
@@ -307,13 +351,13 @@ function App() {
         );
       case 'Flights':          return <FlightsPage    {...navProps} />;
       case 'Simulation':       return <SimulationPage {...navProps} />;
-      case 'Mitigation Board': return <MitigationBoard {...navProps} />;
-      case 'User Management':  return <UserManagement  {...navProps} />;
+      case 'Mitigation Board': return <MitigationBoard {...navProps} refreshTrigger={boardRefreshTrigger} />;
+      case 'User Management':  return <UserManagement  {...navProps} refreshTrigger={usersRefreshTrigger} />;
       case 'Settings':         return <Settings        {...navProps} />;
       case 'Profile':          return <Profile         {...navProps} />;
       default:
         return userRole === 'Admin'
-          ? <UserManagement {...navProps} />
+          ? <UserManagement {...navProps} refreshTrigger={usersRefreshTrigger} />
           : <Dashboard
               {...navProps}
               refreshKey={dashRefreshKey}

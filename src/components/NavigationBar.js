@@ -26,6 +26,9 @@ const NavigationBar = ({
   onAdminRequestsRead,
   onAlertDismiss,      // (flightNo) => void
   onAlertAddToBoard,   // (flightNo) => void
+  onDeleteUser,        // (request) => void
+  onRejectRequest,     // (request) => void
+  onDismissRequest,    // (requestId) => void
 }) => {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
@@ -280,24 +283,26 @@ const NavigationBar = ({
                       <div style={{ fontSize: 11, color: '#999', marginTop: 8, marginBottom: 10 }}>
                         Requested: {formatRequestTime(request.requestTime)}
                       </div>
-                      <button
-                        onClick={() => {
-                          onNotifClose && onNotifClose();
-                          onTabChange && onTabChange('User Management');
-                          onAdminRequestsDismiss && onAdminRequestsDismiss(request.id);
-                        }}
-                        style={{
-                          padding: '6px 16px', fontSize: 12,
-                          border: 'none',
-                          background: '#1A4B8F',
-                          color: '#fff',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          fontWeight: 500,
-                        }}
-                      >
-                        View in User Management
-                      </button>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => onDeleteUser && onDeleteUser(request)}
+                          style={{ padding: '5px 12px', fontSize: 12, border: 'none',
+                                   background: '#dc2626', color: '#fff', borderRadius: 6, cursor: 'pointer' }}>
+                          Delete User
+                        </button>
+                        <button
+                          onClick={() => onRejectRequest && onRejectRequest(request)}
+                          style={{ padding: '5px 12px', fontSize: 12, border: 'none',
+                                   background: '#f59e0b', color: '#fff', borderRadius: 6, cursor: 'pointer' }}>
+                          Reject Request
+                        </button>
+                        <button
+                          onClick={() => onDismissRequest && onDismissRequest(request.id)}
+                          style={{ padding: '5px 12px', fontSize: 12, border: '1px solid #d1d5db',
+                                   background: '#f9fafb', color: '#374151', borderRadius: 6, cursor: 'pointer' }}>
+                          Dismiss
+                        </button>
+                      </div>
                     </div>
                   ))
                 )

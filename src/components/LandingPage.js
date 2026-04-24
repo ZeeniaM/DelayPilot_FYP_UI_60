@@ -564,7 +564,7 @@ const LandingPage = ({ onGoToLogin }) => {
             <div style={S.sectionLabel}>Passenger Tool</div>
             <h2 style={{ ...S.sectionTitle, textAlign: 'center' }}>Check Your Flight</h2>
             <p style={{ ...S.sectionSub, maxWidth: 480, margin: '0 auto', textAlign: 'center' }}>
-              Enter your flight number to get real-time status and delay probabilities
+              Enter your flight number to get real-time status and delay probability
               from our prediction system.
             </p>
           </div>
@@ -1036,13 +1036,23 @@ const LandingPage = ({ onGoToLogin }) => {
             {/* Feature bullets */}
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[
-                { icon: '📊', label: 'Live KPI Dashboard' },
+                { icon: '/chart-icon.png', label: 'Live KPI Dashboard', isImage: true },
                 { icon: '✈',  label: 'Full Flight Monitor' },
-                { icon: '🔬', label: 'Delay Simulation' },
-                { icon: '🛡',  label: 'Mitigation Board' },
+                { icon: '/simulate-icon.png', label: 'Delay Simulation', isImage: true },
+                { icon: '/shield-icon.png', label: 'Mitigation Board', isImage: true },
               ].map(f => (
                 <div key={f.label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
-                  <span style={{ fontSize: 15, width: 22, textAlign: 'center' }}>{f.icon}</span>
+                  <span style={{ fontSize: 15, width: 22, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {f.isImage ? (
+                      <img
+                        src={f.icon}
+                        alt=""
+                        style={{ width: 15, height: 15, objectFit: 'contain' }}
+                      />
+                    ) : (
+                      f.icon
+                    )}
+                  </span>
                   {f.label}
                 </div>
               ))}

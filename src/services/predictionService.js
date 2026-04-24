@@ -520,12 +520,17 @@ export const simulateFlight = async (number_raw, sched_utc, overrides = {}) => {
  */
 export const fetchPropagation = async (number_raw, sched_utc) => {
   try {
-    const { data } = await authAxios().get('/predictions/propagation', {
+    const response = await authAxios().get('/predictions/propagation', {
       params: { number_raw, sched_utc },
     });
-    return data.connected_flights || [];
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.propagation)) return data.propagation;
+    if (Array.isArray(data?.connected_flights)) return data.connected_flights;
+    return [];
   } catch (err) {
-    console.warn('[predictionService] fetchPropagation failed:', err.message);
+    if (err.response?.status === 404) return [];
+    console.warn('[predictionService] fetchPropagation failed (non-fatal):', err.message);
     return [];
   }
 };

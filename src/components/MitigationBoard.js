@@ -9,7 +9,7 @@ import {
 } from '../styles/components.styles';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
-import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, permanentDeleteCase, getComments, addComment } from '../services/mitigationService';
+import { getCases, getClosedCases, createCase, updateCaseStatus, updateCase, closeCase, permanentDeleteCase, getComments, addComment, deleteComment, toggleReaction } from '../services/mitigationService';
 import { fetchFlights, fetchPropagation } from '../services/predictionService';
 import API_BASE_URL from '../config/api';
 
@@ -310,7 +310,7 @@ const ClearLink = styled.button`
 
 const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false, liveAlerts = [], onNotifClick, onNotifClose,
-  onAlertDismiss, onAlertAddToBoard, ...navExtras
+  onAlertDismiss, onAlertAddToBoard, refreshTrigger = 0, ...navExtras
 }) => {
   const [query, setQuery] = useState('');
   const [activeAirlines, setActiveAirlines] = useState(new Set());
@@ -338,7 +338,17 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const [propagationData, setPropagationData] = useState(null);
   const [propagationLoading, setPropagationLoading] = useState(false);
   const [rolePerms, setRolePerms] = useState(null);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [hoveredCommentId, setHoveredCommentId] = useState(null);
+  const [openMenuCommentId, setOpenMenuCommentId] = useState(null);
+  const [emojiPickerCommentId, setEmojiPickerCommentId] = useState(null);
+  const chatDialogRef = useRef(null);
   const wsRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+  const activeCaseIdRef = useRef(null);
+
+  const currentUser = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), []);
+  const currentUserId = currentUser.id;
 
   const loadBoard = async () => {
     setLoading(true);
@@ -362,6 +372,29 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     loadBoard();
     fetchFlights().then(flights => { if (flights) setLiveFlights(flights); }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      loadBoard();
+    }
+  }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (!showCommentsPanel) return undefined;
+
+    const handleClickOutside = (e) => {
+      if (openMenuCommentId === null) return;
+
+      const clickedInsideDialog = chatDialogRef.current?.contains(e.target);
+      const clickedMenu = e.target.closest('[data-comment-menu]');
+      if (!clickedInsideDialog || !clickedMenu) {
+        setOpenMenuCommentId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openMenuCommentId, showCommentsPanel]);
 
   // Fetch role permissions on mount and keep them fresh while the user is logged in.
   useEffect(() => {
@@ -596,7 +629,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
     setPropagationData(null);
     try {
       const propagation = await fetchPropagation(c.flight_number, c.sched_utc);
-      setPropagationData(propagation || []);
+      setPropagationData(Array.isArray(propagation) ? propagation : []);
     } catch (error) {
       console.warn('Error loading propagation:', error);
       setPropagationData([]);
@@ -604,26 +637,54 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       setPropagationLoading(false);
     }
 
-    // Open WebSocket for real-time comments
-    if (wsRef.current) wsRef.current.close();
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      const token = localStorage.getItem('token');
-      ws.send(JSON.stringify({ type: 'auth', token }));
-      ws.send(JSON.stringify({ type: 'join', caseId: c.id }));
-    };
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'comment') {
-          setComments(prev =>
-            prev.some(x => x.id === msg.comment.id) ? prev : [...prev, msg.comment]
-          );
+    // Open WebSocket for real-time comments with auto-reconnect
+    activeCaseIdRef.current = c.id;
+    clearInterval(pollIntervalRef.current);
+
+    const connectCaseWS = (caseId) => {
+      if (wsRef.current) wsRef.current.close();
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        const token = localStorage.getItem('token');
+        ws.send(JSON.stringify({ type: 'auth', token }));
+        ws.send(JSON.stringify({ type: 'join', caseId }));
+      };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'comment') {
+            setComments(prev =>
+              prev.some(x => x.id === msg.comment.id) ? prev : [...prev, msg.comment]
+            );
+          } else if (msg.type === 'comment_deleted') {
+            setComments(prev => prev.filter(c => c.id !== msg.commentId));
+          } else if (msg.type === 'reaction_update') {
+            setComments(prev => prev.map(c =>
+              c.id === msg.commentId ? { ...c, reactions: msg.reactions } : c
+            ));
+          }
+        } catch {}
+      };
+      ws.onerror = (err) => console.warn('WebSocket error:', err);
+      ws.onclose = () => {
+        if (activeCaseIdRef.current === caseId) {
+          setTimeout(() => connectCaseWS(caseId), 2000);
         }
-      } catch {}
+      };
     };
-    ws.onerror = (err) => console.warn('WebSocket error:', err);
+
+    connectCaseWS(c.id);
+
+    // Polling fallback: fetch comments when WebSocket is not connected
+    pollIntervalRef.current = setInterval(async () => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        try {
+          const fresh = await getComments(c.id);
+          setComments(fresh || []);
+        } catch {}
+      }
+    }, 5000);
   };
 
   const toggleViewTag = async (name) => {
@@ -683,6 +744,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
   const openCreateDrawer = () => {
     if (!canEdit) return;
+    activeCaseIdRef.current = null;
+    clearInterval(pollIntervalRef.current);
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     setDrawerMode('create');
     setSelectedFlight(null);
@@ -705,10 +768,11 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
   const addCommentHandler = async (text) => {
     if (!text || !drawerCase) return;
     try {
-      const newComment = await addComment(drawerCase.id, text, userName);
+      const newComment = await addComment(drawerCase.id, text, userName, replyingTo?.id || null);
       setComments(prev =>
         prev.some(x => x.id === newComment.id) ? prev : [...prev, newComment]
       );
+      setReplyingTo(null);
       if (drawerCase && drawerMode === 'view') {
         setCardNotifications(prev => new Set(prev).add(drawerCase.id));
       }
@@ -717,6 +781,34 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       alert('Failed to add comment. Please try again.');
     }
   };
+
+  const handleDeleteComment = async (commentId) => {
+    if (!drawerCase) return;
+    try {
+      await deleteComment(drawerCase.id, commentId);
+      setComments(prev => prev.filter(c => c.id !== commentId));
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      alert('Failed to delete comment. Please try again.');
+    }
+  };
+
+  const handleReaction = async (commentId, emoji) => {
+    if (!drawerCase) return;
+    try {
+      const data = await toggleReaction(drawerCase.id, commentId, emoji);
+      if (data.success) {
+        setComments(prev => prev.map(c =>
+          c.id === commentId ? { ...c, reactions: data.reactions } : c
+        ));
+      }
+    } catch (error) {
+      console.error('Error toggling reaction:', error);
+    }
+  };
+
+  const getParentComment = (parentId) =>
+    comments.find(c => c.id === parentId) || null;
 
 
   const saveNewCase = async () => {
@@ -875,44 +967,274 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
       </MainContent>
 
       {showCommentsPanel && (
-        <ModalBackdrop onClick={() => setShowCommentsPanel(false)}>
-          <ModalCard style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+        <ModalBackdrop onClick={() => {
+          setOpenMenuCommentId(null);
+          setEmojiPickerCommentId(null);
+          setShowCommentsPanel(false);
+        }}>
+          <ModalCard style={{ maxWidth: 640, position: 'relative' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
               <div style={{ fontWeight:800, color:'#333' }}>Chat</div>
-              <button style={{ border:'none', background:'transparent', color:'#1A4B8F', cursor:'pointer' }} onClick={() => setShowCommentsPanel(false)}>✕</button>
+              <button style={{ border:'none', background:'transparent', color:'#1A4B8F', cursor:'pointer' }} onClick={() => {
+                setOpenMenuCommentId(null);
+                setEmojiPickerCommentId(null);
+                setShowCommentsPanel(false);
+                setReplyingTo(null);
+              }}>✕</button>
             </div>
-            <div style={{ border:'1px solid #eef1f4', borderRadius:8, display:'flex', flexDirection:'column', height: 420 }}>
+            <div ref={chatDialogRef} style={{ border:'1px solid #eef1f4', borderRadius:8, display:'flex', flexDirection:'column', height: 420 }}>
               <div style={{ flex:1, overflow:'auto', padding:10, display:'flex', flexDirection:'column', gap:8 }}>
                 {comments.map(c => {
                   const author = c.author_username || c.by || '';
-                  const isSelf = author.toLowerCase() === (userName || 'apoc').toLowerCase();
                   const ts = c.created_at || c.at;
+                  const isOwn = c.author_user_id === currentUserId;
                   return (
                     <div
                       key={c.id}
+                      onMouseEnter={() => setHoveredCommentId(c.id)}
+                      onMouseLeave={() => {
+                        setHoveredCommentId(null);
+                      }}
                       style={{
-                        alignSelf: isSelf ? 'flex-end' : 'flex-start',
-                        background: isSelf ? '#e0f2fe' : '#f8fafc',
-                        padding: 10,
-                        borderRadius: 8,
-                        maxWidth: '75%',
+                        display: 'flex',
+                        flexDirection: isOwn ? 'row-reverse' : 'row',
+                        alignItems: 'flex-end',
+                        gap: 6,
+                        marginBottom: 10,
+                        position: 'relative',
                       }}
                     >
-                      <div style={{ color:'#333' }}>{c.comment_text || c.text}</div>
-                      <div style={{ color:'#666', fontSize:12, marginTop:4 }}>{ts ? new Date(ts).toLocaleString() : 'just now'} • {author}</div>
+                      <div style={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
+                        {c.parent_comment_id && (() => {
+                          const parent = getParentComment(c.parent_comment_id);
+                          return (
+                            <div style={{
+                              background: '#f1f5f9',
+                              borderLeft: isOwn ? 'none' : '3px solid #94a3b8',
+                              borderRight: isOwn ? '3px solid #94a3b8' : 'none',
+                              borderRadius: 6,
+                              padding: '3px 8px',
+                              marginBottom: 2,
+                              fontSize: 11,
+                              color: '#64748b',
+                              maxWidth: '100%',
+                            }}>
+                              <span style={{ fontWeight: 600 }}>
+                                {parent ? parent.author_username : 'Deleted message'}
+                              </span>
+                              <div style={{
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                maxWidth: 200,
+                              }}>
+                                {parent ? parent.comment_text : '[Message no longer available]'}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <div style={{ position: 'relative', width: '100%' }}>
+                          <div style={{
+                            background: isOwn ? '#1A4B8F' : '#f3f4f6',
+                            color: isOwn ? '#fff' : '#1f2937',
+                            borderRadius: isOwn ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                            padding: '8px 28px 8px 12px',
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                            wordBreak: 'break-word',
+                          }}>
+                            {!isOwn && (
+                              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2, color: '#6b7280' }}>
+                                {author}
+                              </div>
+                            )}
+                            {c.comment_text || c.text}
+                          </div>
+
+                          {(hoveredCommentId === c.id || openMenuCommentId === c.id) && (
+                            <button
+                              data-comment-menu="true"
+                              onClick={() => setOpenMenuCommentId(
+                                openMenuCommentId === c.id ? null : c.id
+                              )}
+                              style={{
+                                position: 'absolute',
+                                top: 4,
+                                right: 4,
+                                background: 'transparent',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontSize: 10,
+                                color: isOwn ? 'rgba(255,255,255,0.7)' : '#9ca3af',
+                                padding: '1px 3px',
+                                lineHeight: 1,
+                              }}
+                            >
+                              {openMenuCommentId === c.id ? '^' : 'v'}
+                            </button>
+                          )}
+
+                          {openMenuCommentId === c.id && (
+                            <div data-comment-menu="true" style={{
+                              position: 'absolute',
+                              top: '100%',
+                              right: isOwn ? 0 : 'auto',
+                              left: isOwn ? 'auto' : 0,
+                              marginTop: 2,
+                              background: '#ffffff',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: 8,
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                              zIndex: 100,
+                              minWidth: 110,
+                              padding: '4px 0',
+                            }}>
+                              <button
+                                onClick={() => {
+                                  setReplyingTo(c);
+                                  setOpenMenuCommentId(null);
+                                }}
+                                style={{
+                                  display: 'block', width: '100%', textAlign: 'left',
+                                  padding: '7px 14px', border: 'none', background: 'transparent',
+                                  cursor: 'pointer', fontSize: 13, color: '#374151',
+                                }}
+                              >
+                                Reply
+                              </button>
+                              {isOwn && (
+                                <button
+                                  onClick={() => {
+                                    handleDeleteComment(c.id);
+                                    setOpenMenuCommentId(null);
+                                  }}
+                                  style={{
+                                    display: 'block', width: '100%', textAlign: 'left',
+                                    padding: '7px 14px', border: 'none', background: 'transparent',
+                                    cursor: 'pointer', fontSize: 13, color: '#dc2626',
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {(c.reactions || []).filter(r => (r.cnt || r.count || 0) > 0).length > 0 && (
+                          <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
+                            {(c.reactions || []).filter(r => (r.cnt || r.count || 0) > 0).map(r => {
+                              const userReacted = r.userIds?.includes(currentUserId) || r.user_ids?.includes(currentUserId);
+                              const reactionCount = r.cnt || r.count || 0;
+                              return (
+                                <button key={r.emoji}
+                                  onClick={() => handleReaction(c.id, r.emoji)}
+                                  style={{
+                                    background: userReacted ? '#dbeafe' : '#f3f4f6',
+                                    border: userReacted ? '1px solid #93c5fd' : '1px solid #e5e7eb',
+                                    borderRadius: 12, padding: '1px 7px', cursor: 'pointer',
+                                    fontSize: 11, display: 'flex', alignItems: 'center', gap: 2,
+                                  }}
+                                >
+                                  {r.emoji} {reactionCount}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>
+                          {ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'just now'}
+                        </div>
+                      </div>
+
+                      {(hoveredCommentId === c.id || openMenuCommentId === c.id || emojiPickerCommentId === c.id) && (
+                        <button
+                          title="Add reaction"
+                          onClick={() => setEmojiPickerCommentId(
+                            emojiPickerCommentId === c.id ? null : c.id
+                          )}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: 2,
+                            flexShrink: 0,
+                            opacity: 0.6,
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <img src="/icon8-weird-24.png" alt="react" width={18} height={18} />
+                        </button>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              <div style={{ padding:10, borderTop:'1px solid #eef1f4', display:'flex', gap:8, alignItems:'center' }}>
-                <input style={{ flex:1, padding:'10px 12px', border:'1px solid #e1e5e9', borderRadius:8 }} placeholder="Type a message..." id="panelCommentInput" />
-                <button
-                  title="Send"
-                  style={{ border:'none', background:'#1A4B8F', color:'#fff', width:40, height:40, borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
-                  onClick={() => { const input = document.getElementById('panelCommentInput'); if (input && input.value) { addCommentHandler(input.value); input.value=''; }}}
-                >
-                  ➤
-                </button>
+              {emojiPickerCommentId !== null && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: 72,
+                  right: 16,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 12,
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+                  padding: '8px 12px',
+                  display: 'flex',
+                  gap: 8,
+                  zIndex: 200,
+                }}>
+                  {['👍', '👎', '✅', '❌', '⚠️', '🔥', '👀'].map(emoji => (
+                    <button key={emoji}
+                      onClick={() => {
+                        handleReaction(emojiPickerCommentId, emoji);
+                        setEmojiPickerCommentId(null);
+                      }}
+                      style={{
+                        fontSize: 20, background: 'transparent',
+                        border: 'none', cursor: 'pointer', padding: 4,
+                        borderRadius: 6,
+                      }}
+                      title={emoji}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div style={{ borderTop:'1px solid #eef1f4' }}>
+                {replyingTo && (
+                  <div style={{ background:'#f0f4ff', padding:'6px 10px', fontSize:12, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <span>↩ Replying to {replyingTo.author_username}: "{(replyingTo.comment_text || '').slice(0, 40)}{(replyingTo.comment_text || '').length > 40 ? '...' : ''}"</span>
+                    <button onClick={() => setReplyingTo(null)} style={{ border:'none', background:'transparent', cursor:'pointer', fontSize:14, color:'#555' }}>✕</button>
+                  </div>
+                )}
+                <div style={{ padding:10, display:'flex', gap:8, alignItems:'center' }}>
+                  <input
+                    style={{ flex:1, padding:'10px 12px', border:'1px solid #e1e5e9', borderRadius:8 }}
+                    placeholder="Type a message..."
+                    id="panelCommentInput"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (e.currentTarget.value.trim()) {
+                          addCommentHandler(e.currentTarget.value);
+                          e.currentTarget.value = '';
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    title="Send"
+                    style={{ border:'none', background:'#1A4B8F', color:'#fff', width:40, height:40, borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
+                    onClick={() => { const input = document.getElementById('panelCommentInput'); if (input && input.value) { addCommentHandler(input.value); input.value=''; }}}
+                  >
+                    ➤
+                  </button>
+                </div>
               </div>
             </div>
           </ModalCard>
@@ -962,6 +1284,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
       {drawerCase && (
         <DrawerOverlay onClick={() => {
+          activeCaseIdRef.current = null;
+          clearInterval(pollIntervalRef.current);
           if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
           setDrawerCase(null);
           setPropagationData(null);
@@ -1181,6 +1505,8 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
 
               <DrawerFooter>
                 <StyledDrawerButton onClick={() => {
+                  activeCaseIdRef.current = null;
+                  clearInterval(pollIntervalRef.current);
                   if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
                   setDrawerCase(null);
                   setPropagationData(null);
@@ -1323,7 +1649,7 @@ const MitigationBoard = ({ userRole = 'APOC', userName, onLogout, activeTab, onT
             </DrawerContent>
 
             <DrawerFooter>
-              <StyledDrawerButton onClick={() => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } setDrawerCase(null); setPropagationData(null); setPropagationLoading(false); setDrawerMode('view'); }}>Cancel</StyledDrawerButton>
+              <StyledDrawerButton onClick={() => { activeCaseIdRef.current = null; clearInterval(pollIntervalRef.current); if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } setDrawerCase(null); setPropagationData(null); setPropagationLoading(false); setDrawerMode('view'); }}>Cancel</StyledDrawerButton>
               <StyledDrawerButton primary onClick={saveNewCase} disabled={!selectedFlight}>Save Case</StyledDrawerButton>
             </DrawerFooter>
           </>

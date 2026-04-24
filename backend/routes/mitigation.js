@@ -494,10 +494,29 @@ router.get('/cases/:id/comments', verifyToken, async (req, res) => {
     }
 
     const result = await query(
-      `SELECT id, case_id, author_user_id, author_username, comment_text, created_at
-       FROM case_comments
-       WHERE case_id = $1
-       ORDER BY created_at ASC`,
+      `SELECT
+        c.id, c.case_id, c.author_user_id, c.author_username,
+        c.comment_text, c.created_at, c.parent_comment_id,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'emoji', r.emoji,
+              'count', r.cnt,
+              'userIds', r.user_ids
+            )
+          ) FILTER (WHERE r.emoji IS NOT NULL),
+          '[]'::json
+        ) AS reactions
+       FROM case_comments c
+       LEFT JOIN (
+         SELECT comment_id, emoji, COUNT(*) AS cnt,
+                json_agg(user_id) AS user_ids
+         FROM comment_reactions
+         GROUP BY comment_id, emoji
+       ) r ON r.comment_id = c.id
+       WHERE c.case_id = $1
+       GROUP BY c.id
+       ORDER BY c.created_at ASC`,
       [id]
     );
 
@@ -524,7 +543,7 @@ router.get('/cases/:id/comments', verifyToken, async (req, res) => {
 router.post('/cases/:id/comments', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { comment_text, author_username } = req.body;
+    const { comment_text, author_username, parent_comment_id } = req.body;
 
     if (!comment_text || !comment_text.trim()) {
       return res.status(400).json({
@@ -550,10 +569,10 @@ router.post('/cases/:id/comments', verifyToken, async (req, res) => {
     const finalAuthorUsername = author_username || req.user.username;
 
     const result = await query(
-      `INSERT INTO case_comments (case_id, author_user_id, author_username, comment_text, created_at)
-       VALUES ($1, $2, $3, $4, NOW())
-       RETURNING id, case_id, author_user_id, author_username, comment_text, created_at`,
-      [id, req.user.id, finalAuthorUsername, comment_text.trim()]
+      `INSERT INTO case_comments (case_id, author_user_id, author_username, comment_text, parent_comment_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, case_id, author_user_id, author_username, comment_text, created_at, parent_comment_id`,
+      [id, req.user.id, finalAuthorUsername, comment_text.trim(), parent_comment_id || null]
     );
 
     const newComment = result.rows[0];
@@ -574,6 +593,85 @@ router.post('/cases/:id/comments', verifyToken, async (req, res) => {
       message: 'Failed to add comment',
       error: error.message
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// DELETE /api/mitigation/cases/:caseId/comments/:commentId
+// Delete a comment (author or Admin only)
+// ─────────────────────────────────────────────────────────────
+router.delete('/cases/:caseId/comments/:commentId', verifyToken, async (req, res) => {
+  try {
+    const { caseId, commentId } = req.params;
+
+    const commentResult = await query(
+      'SELECT author_user_id FROM case_comments WHERE id = $1',
+      [commentId]
+    );
+
+    if (commentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Comment not found' });
+    }
+
+    const comment = commentResult.rows[0];
+
+    if (req.user.id !== comment.author_user_id && req.user.role !== 'Admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this comment' });
+    }
+
+    await query('DELETE FROM case_comments WHERE id = $1', [commentId]);
+
+    const broadcast = req.app.locals.broadcastToCase;
+    if (broadcast) broadcast(parseInt(caseId), { type: 'comment_deleted', commentId: parseInt(commentId) });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete comment', error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/mitigation/cases/:caseId/comments/:commentId/reactions
+// Toggle an emoji reaction (add if absent, remove if present)
+// ─────────────────────────────────────────────────────────────
+const ALLOWED_EMOJIS = ['👍', '👎', '✅', '❌', '⚠️', '🔥', '👀'];
+
+router.post('/cases/:caseId/comments/:commentId/reactions', verifyToken, async (req, res) => {
+  try {
+    const { caseId, commentId } = req.params;
+    const { emoji } = req.body;
+
+    if (!emoji || !ALLOWED_EMOJIS.includes(emoji)) {
+      return res.status(400).json({ success: false, message: 'Invalid emoji' });
+    }
+
+    const existing = await query(
+      'SELECT id FROM comment_reactions WHERE comment_id=$1 AND user_id=$2 AND emoji=$3',
+      [commentId, req.user.id, emoji]
+    );
+
+    if (existing.rows.length > 0) {
+      await query('DELETE FROM comment_reactions WHERE id=$1', [existing.rows[0].id]);
+    } else {
+      await query(
+        'INSERT INTO comment_reactions (comment_id, user_id, emoji) VALUES ($1, $2, $3)',
+        [commentId, req.user.id, emoji]
+      );
+    }
+
+    const result = await query(
+      'SELECT emoji, COUNT(*) as cnt, json_agg(user_id) as user_ids FROM comment_reactions WHERE comment_id=$1 GROUP BY emoji',
+      [commentId]
+    );
+
+    const broadcast = req.app.locals.broadcastToCase;
+    if (broadcast) broadcast(parseInt(caseId), { type: 'reaction_update', commentId: parseInt(commentId), reactions: result.rows });
+
+    res.json({ success: true, reactions: result.rows });
+  } catch (error) {
+    console.error('Error toggling reaction:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle reaction', error: error.message });
   }
 });
 

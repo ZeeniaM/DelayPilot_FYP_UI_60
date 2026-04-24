@@ -186,11 +186,21 @@ const InputWithError = styled(Input)`
   }
 `;
 
+const MUNICH_AIRLINES = [
+  'Lufthansa', 'Air France', 'British Airways', 'Ryanair', 'easyJet',
+  'Turkish Airlines', 'Swiss International Air Lines', 'Austrian Airlines',
+  'Eurowings', 'KLM', 'Iberia', 'ITA Airways', 'Finnair',
+  'SAS Scandinavian Airlines', 'TAP Air Portugal', 'LOT Polish Airlines',
+  'Wizz Air', 'Vueling', 'Condor', 'Brussels Airlines',
+  'Croatia Airlines', 'Air Serbia'
+];
+
 const LoginPage = ({ onLogin, onGoBack }) => {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
-    role: 'APOC' // Default role
+    role: 'APOC',
+    airline: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -198,7 +208,8 @@ const LoginPage = ({ onLogin, onGoBack }) => {
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [validationErrors, setValidationErrors] = useState({
     username: '',
-    password: ''
+    password: '',
+    airline: ''
   });
 
   const validateUsername = (username) => {
@@ -237,14 +248,30 @@ const LoginPage = ({ onLogin, onGoBack }) => {
       }));
       // Clear general error when user starts typing
       if (error) setError('');
+    } else if (name === 'airline') {
+      setValidationErrors(prev => ({
+        ...prev,
+        airline: formData.role === 'AOC' && !value ? 'Airline is required' : ''
+      }));
+      if (error) setError('');
+    } else if (name === 'role') {
+      setValidationErrors(prev => ({
+        ...prev,
+        airline: value === 'AOC' && !formData.airline ? 'Airline is required' : ''
+      }));
+      if (error) setError('');
     }
   };
 
   const isFormValid = () => {
-    return formData.username.length >= 4 && 
-           formData.password.length >= 8 && 
-           !validationErrors.username && 
-           !validationErrors.password;
+    const baseValid = formData.username.length >= 4 &&
+      formData.password.length >= 8 &&
+      !validationErrors.username &&
+      !validationErrors.password;
+    if (formData.role === 'AOC') {
+      return baseValid && formData.airline !== '';
+    }
+    return baseValid;
   };
 
   const handleLogin = async (e) => {
@@ -254,10 +281,13 @@ const LoginPage = ({ onLogin, onGoBack }) => {
     const usernameError = validateUsername(formData.username);
     const passwordError = validatePassword(formData.password);
     
-    if (usernameError || passwordError) {
+    const airlineError = formData.role === 'AOC' && !formData.airline ? 'Airline is required' : '';
+    
+    if (usernameError || passwordError || airlineError) {
       setValidationErrors({
         username: usernameError,
-        password: passwordError
+        password: passwordError,
+        airline: airlineError
       });
       return;
     }
@@ -271,7 +301,8 @@ const LoginPage = ({ onLogin, onGoBack }) => {
       const response = await axios.post(`${API_BASE_URL}/auth/login`, {
         username: formData.username,
         password: formData.password,
-        role: formData.role
+        role: formData.role,
+        airline: formData.airline || undefined
       });
 
       if (response.data.success) {
@@ -297,7 +328,7 @@ const LoginPage = ({ onLogin, onGoBack }) => {
       // Handle specific auth errors without mentioning role
       if (err.response) {
         if (err.response.status === 401) {
-          setError('Password or username or role is invalid');
+          setError('Username, Password or Role is Invalid');
         } else if (err.response.status === 403) {
           // Show backend message for inactive accounts or forbidden access
           setError(err.response.data?.message || 'Account is inactive. Please contact the administrator.');
@@ -397,6 +428,23 @@ const LoginPage = ({ onLogin, onGoBack }) => {
               <option value="Admin">Admin</option>
             </Select>
           </InputGroup>
+
+          {formData.role === 'AOC' && (
+            <InputGroup>
+              <Label htmlFor="airline">Airline *</Label>
+              <Select
+                id="airline"
+                name="airline"
+                value={formData.airline}
+                onChange={handleInputChange}
+                required
+              >
+                <option value="">Select your airline</option>
+                {MUNICH_AIRLINES.map(a => <option key={a} value={a}>{a}</option>)}
+              </Select>
+              {validationErrors.airline && <FieldError>{validationErrors.airline}</FieldError>}
+            </InputGroup>
+          )}
 
           <LoginButton type="submit" disabled={isLoading || !isFormValid()}>
             {isLoading ? 'Logging in...' : 'Login'}

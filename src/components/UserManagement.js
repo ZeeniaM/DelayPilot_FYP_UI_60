@@ -238,6 +238,15 @@ const SuccessMessage = styled.div`
   margin-top: 4px;
 `;
 
+const MUNICH_AIRLINES = [
+  'Lufthansa', 'Air France', 'British Airways', 'Ryanair', 'easyJet',
+  'Turkish Airlines', 'Swiss International Air Lines', 'Austrian Airlines',
+  'Eurowings', 'KLM', 'Iberia', 'ITA Airways', 'Finnair',
+  'SAS Scandinavian Airlines', 'TAP Air Portugal', 'LOT Polish Airlines',
+  'Wizz Air', 'Vueling', 'Condor', 'Brussels Airlines',
+  'Croatia Airlines', 'Air Serbia'
+];
+
 const mockUsers = [
   { id: 1, name: 'System Administrator', username: 'admin', email: 'admin@delaypilot.com', role: 'Admin', status: 'active', lastLogin: '2024-01-15 10:30' },
   { id: 2, name: 'John Smith', username: 'apoc1', email: 'johnsmith@delaypilot.com', role: 'APOC', status: 'active', lastLogin: '2024-01-15 09:45' },
@@ -248,7 +257,7 @@ const mockUsers = [
 
 const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
   notifCount, hasNewNotif, notifOpen, liveAlerts,
-  onNotifClick, onNotifClose, ...navExtras
+  onNotifClick, onNotifClose, refreshTrigger = 0, ...navExtras
 }) => {
   const [users, setUsers] = useState([]);
   const [deletionRequests, setDeletionRequests] = useState([]);
@@ -269,7 +278,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     username: '',
     password: '',
     role: 'APOC',
-    email: ''
+    email: '',
+    airline: ''
   });
 
   const [editUser, setEditUser] = useState({
@@ -277,7 +287,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     username: '',
     password: '',
     role: '',
-    email: ''
+    email: '',
+    airline: ''
   });
 
   const [validationErrors, setValidationErrors] = useState({});
@@ -289,6 +300,12 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     fetchUsers();
     fetchDeletionRequests();
   }, []);
+
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      fetchUsers();
+    }
+  }, [refreshTrigger]);
 
   const fetchUsers = async () => {
     try {
@@ -307,6 +324,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           username: user.username,
           email: user.email || '',
           role: user.role,
+          airline: user.airline || '',
           status: user.status || 'active',
           lastLogin: user.last_login ? new Date(user.last_login).toLocaleString() : 'Never'
         }));
@@ -358,9 +376,19 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     const errors = {};
     const usernameError = validateUsername(newUser.username);
     if (usernameError) errors.username = usernameError;
-    
+
     const passwordError = validatePassword(newUser.password);
     if (passwordError) errors.password = passwordError;
+
+    if (newUser.role === 'AOC' && !newUser.airline.trim()) {
+      errors.airline = 'Airline is required for AOC role';
+    }
+    if (!newUser.email || !newUser.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!newUser.email.includes('@') || !newUser.email.includes('.')) {
+      errors.email = 'Please enter a valid email address';
+    }
+
     if (Object.keys(errors).length > 0) {
       setValidationErrors(errors);
       setIsLoading(false);
@@ -376,7 +404,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           password: newUser.password,
           role: newUser.role,
           email: newUser.email || null,
-          name: newUser.name || null
+          name: newUser.name || null,
+          airline: newUser.airline || null
         },
         {
           headers: {
@@ -393,7 +422,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           username: '',
           password: '',
           role: 'APOC',
-          email: ''
+          email: '',
+          airline: ''
         });
         setValidationErrors({});
         // Refresh users list
@@ -456,7 +486,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
         username: user.username,
         password: '', // Don't pre-fill password
         role: user.role,
-        email: user.email || ''
+        email: user.email || '',
+        airline: user.airline || ''
       });
       setSelectedUser(user);
       setShowEditUserModal(true);
@@ -476,11 +507,21 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
     const errors = {};
     const usernameError = validateUsername(editUser.username);
     if (usernameError) errors.username = usernameError;
-    
+
     if (editUser.password) {
       const passwordError = validatePassword(editUser.password, true);
       if (passwordError) errors.password = passwordError;
     }
+
+    if (editUser.role === 'AOC' && !editUser.airline.trim()) {
+      errors.airline = 'Airline is required for AOC role';
+    }
+    if (!editUser.email || !editUser.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!editUser.email.includes('@') || !editUser.email.includes('.')) {
+      errors.email = 'Please enter a valid email address';
+    }
+
     if (Object.keys(errors).length > 0) {
       setValidationErrors(errors);
       setIsLoading(false);
@@ -493,7 +534,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
         username: editUser.username,
         role: editUser.role,
         email: editUser.email || null,
-        name: editUser.name || null
+        name: editUser.name || null,
+        airline: editUser.airline || null
       };
 
       // Only include password if it's provided
@@ -517,7 +559,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
           fetchUsers();
           setShowEditUserModal(false);
           setSuccess('');
-          setEditUser({ name: '', username: '', password: '', role: '', email: '' });
+          setEditUser({ name: '', username: '', password: '', role: '', email: '', airline: '' });
         }, 1500);
       }
     } catch (err) {
@@ -812,7 +854,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
       {showAddUserModal && (
         <ModalBackdrop onClick={() => !isLoading && setShowAddUserModal(false)}>
           <ModalCard large onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontWeight: 800, color: '#333', marginBottom: 20, fontSize: '20px' }}>
+            <div style={{ fontWeight: 800, color: '#333', marginBottom: 20, fontSize: '20px', textAlign: 'center' }}>
               Create New User
             </div>
             
@@ -821,7 +863,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
 
             <form onSubmit={handleAddUser}>
               <FormGroup>
-                <FormLabel>Name (Optional)</FormLabel>
+                <FormLabel>Name</FormLabel>
                 <FormInput
                   type="text"
                   value={newUser.name}
@@ -868,7 +910,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                 <FormLabel>Role *</FormLabel>
                 <FormSelect
                   value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value, airline: '' })}
                   required
                 >
                   <option value="APOC">APOC</option>
@@ -877,14 +919,31 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                 </FormSelect>
               </FormGroup>
 
+              {newUser.role === 'AOC' && (
+                <FormGroup>
+                  <FormLabel>Airline *</FormLabel>
+                  <FormSelect
+                    name="airline"
+                    value={newUser.airline}
+                    onChange={(e) => setNewUser(prev => ({ ...prev, airline: e.target.value }))}
+                    required
+                  >
+                    <option value="">Select airline</option>
+                    {MUNICH_AIRLINES.map(a => <option key={a} value={a}>{a}</option>)}
+                  </FormSelect>
+                  {validationErrors.airline && <ErrorMessage>{validationErrors.airline}</ErrorMessage>}
+                </FormGroup>
+              )}
+
               <FormGroup>
-                <FormLabel>Email (Optional)</FormLabel>
+                <FormLabel>Email *</FormLabel>
                 <FormInput
                   type="email"
                   value={newUser.email}
                   onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                   placeholder="Enter email address"
                 />
+                {validationErrors.email && <ErrorMessage>{validationErrors.email}</ErrorMessage>}
               </FormGroup>
 
               <ModalActions>
@@ -900,7 +959,8 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                       username: '',
                       password: '',
                       role: 'APOC',
-                      email: ''
+                      email: '',
+                      airline: ''
                     });
                   }}
                   disabled={isLoading}
@@ -923,7 +983,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
       {showEditUserModal && (
         <ModalBackdrop onClick={() => !isLoading && setShowEditUserModal(false)}>
           <ModalCard large onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontWeight: 800, color: '#333', marginBottom: 20, fontSize: '20px' }}>
+            <div style={{ fontWeight: 800, color: '#333', marginBottom: 20, fontSize: '20px', textAlign: 'center' }}>
               Edit User
             </div>
             
@@ -932,7 +992,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
 
             <form onSubmit={handleUpdateUser}>
               <FormGroup>
-                <FormLabel>Name (Optional)</FormLabel>
+                <FormLabel>Name</FormLabel>
                 <FormInput
                   type="text"
                   value={editUser.name}
@@ -978,7 +1038,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                 <FormLabel>Role *</FormLabel>
                 <FormSelect
                   value={editUser.role}
-                  onChange={(e) => setEditUser({ ...editUser, role: e.target.value })}
+                  onChange={(e) => setEditUser({ ...editUser, role: e.target.value, airline: '' })}
                   required
                   disabled={selectedUser?.role === 'Admin'}
                 >
@@ -994,14 +1054,31 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                 )}
               </FormGroup>
 
+              {editUser.role === 'AOC' && (
+                <FormGroup>
+                  <FormLabel>Airline *</FormLabel>
+                  <FormSelect
+                    name="airline"
+                    value={editUser.airline}
+                    onChange={(e) => setEditUser(prev => ({ ...prev, airline: e.target.value }))}
+                    required
+                  >
+                    <option value="">Select airline</option>
+                    {MUNICH_AIRLINES.map(a => <option key={a} value={a}>{a}</option>)}
+                  </FormSelect>
+                  {validationErrors.airline && <ErrorMessage>{validationErrors.airline}</ErrorMessage>}
+                </FormGroup>
+              )}
+
               <FormGroup>
-                <FormLabel>Email (Optional)</FormLabel>
+                <FormLabel>Email *</FormLabel>
                 <FormInput
                   type="email"
                   value={editUser.email}
                   onChange={(e) => setEditUser({ ...editUser, email: e.target.value })}
                   placeholder="Enter email address"
                 />
+                {validationErrors.email && <ErrorMessage>{validationErrors.email}</ErrorMessage>}
               </FormGroup>
 
               <ModalActions>
@@ -1012,7 +1089,7 @@ const UserManagement = ({ userRole, userName, onLogout, activeTab, onTabChange,
                     setError('');
                     setSuccess('');
                     setValidationErrors({});
-                    setEditUser({ name: '', username: '', password: '', role: '', email: '' });
+                    setEditUser({ name: '', username: '', password: '', role: '', email: '', airline: '' });
                     setSelectedUser(null);
                   }}
                   disabled={isLoading}

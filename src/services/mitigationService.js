@@ -167,16 +167,38 @@ export const getComments = async (caseId) => {
  * @param {string} authorUsername - Author username (optional; defaults to logged-in user)
  * @returns {Promise<Object>} Comment object
  */
-export const addComment = async (caseId, text, authorUsername) => {
+export const addComment = async (caseId, text, authorUsername, parentCommentId) => {
   try {
     const payload = { comment_text: text };
-    if (authorUsername) {
-      payload.author_username = authorUsername;
-    }
+    if (authorUsername) payload.author_username = authorUsername;
+    if (parentCommentId) payload.parent_comment_id = parentCommentId;
     const response = await authAxios().post(`/mitigation/cases/${caseId}/comments`, payload);
     return response.data.comment;
   } catch (error) {
     console.error('Error adding comment:', error);
+    throw error;
+  }
+};
+
+export const deleteComment = async (caseId, commentId) => {
+  try {
+    const response = await authAxios().delete(`/mitigation/cases/${caseId}/comments/${commentId}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    throw error;
+  }
+};
+
+export const toggleReaction = async (caseId, commentId, emoji) => {
+  try {
+    const response = await authAxios().post(
+      `/mitigation/cases/${caseId}/comments/${commentId}/reactions`,
+      { emoji }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Error toggling reaction:', error);
     throw error;
   }
 };

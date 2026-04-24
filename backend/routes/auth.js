@@ -181,7 +181,7 @@ router.post('/login', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: 'Password or username is invalid'
+        message: 'No account found with these credentials. The account may not exist or may have been removed.'
       });
     }
 
@@ -189,9 +189,9 @@ router.post('/login', async (req, res) => {
 
     // Check account status (inactive users cannot log in)
     if (user.status && user.status !== 'active') {
-      return res.status(403).json({
+      return res.status(401).json({
         success: false,
-        message: 'Account is inactive. Please contact the administrator.'
+        message: 'This account has been deactivated. Please contact the administrator.'
       });
     }
 
@@ -201,7 +201,7 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({
         success: false,
-        message: 'Password or username is invalid'
+        message: 'Incorrect password. Please try again.'
       });
     }
 
@@ -250,7 +250,8 @@ router.post('/login', async (req, res) => {
         username: user.username,
         role: user.role,
         email: user.email,
-        name: user.name
+        name: user.name,
+        airline: user.airline
       }
     });
   } catch (error) {
@@ -302,13 +303,35 @@ const verifyAdmin = async (req, res, next) => {
 // Register endpoint (admin only - for creating new users)
 router.post('/register', verifyAdmin, async (req, res) => {
   try {
-    const { username, password, role, email, name } = req.body;
+    const { username, password, role, email, name, airline } = req.body;
 
     // Validate input
     if (!username || !password || !role) {
       return res.status(400).json({
         success: false,
         message: 'Username, password, and role are required'
+      });
+    }
+
+    // Email required for ALL roles
+    if (!email || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+    if (!email.includes('@') || !email.includes('.')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address'
+      });
+    }
+
+    // Airline required only for AOC
+    if (role === 'AOC' && (!airline || !airline.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Airline is required for AOC role'
       });
     }
 
@@ -357,8 +380,8 @@ router.post('/register', verifyAdmin, async (req, res) => {
 
     // Insert new user with active status by default
     const result = await query(
-      'INSERT INTO users (username, password, role, email, name, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, role, email, name, status, created_at',
-      [username, hashedPassword, role, email || null, name || null, 'active']
+      'INSERT INTO users (username, password, role, email, name, airline, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, role, email, name, airline, status, created_at',
+      [username, hashedPassword, role, email || null, name || null, airline || null, 'active']
     );
 
     const newUser = result.rows[0];
@@ -381,7 +404,7 @@ router.post('/register', verifyAdmin, async (req, res) => {
 router.get('/users', verifyAdmin, async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, username, role, email, name, status, created_at, last_login FROM users ORDER BY created_at DESC'
+      'SELECT id, username, role, email, name, airline, status, created_at, last_login FROM users ORDER BY created_at DESC'
     );
 
     res.json({
@@ -401,9 +424,32 @@ router.get('/users', verifyAdmin, async (req, res) => {
 router.put('/users/:id', verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, email, name } = req.body;
+    const { username, password, role, email, name, airline } = req.body;
     console.log(`[PUT] /api/auth/users/${id} - Attempting to update user`);
-    console.log(`Update data:`, { username, role, email, name, password: password ? '***' : 'not provided' });
+    console.log(`Update data:`, { username, role, email, name, airline, password: password ? '***' : 'not provided' });
+
+    // Email required for ALL roles
+    if (!email || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+    if (!email.includes('@') || !email.includes('.')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address'
+      });
+    }
+
+    // Airline required only for AOC
+    const effectiveRole = role || (await query('SELECT role FROM users WHERE id = $1', [id])).rows[0]?.role;
+    if (effectiveRole === 'AOC' && (!airline || !airline.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Airline is required for AOC role'
+      });
+    }
 
     // Check if user exists
     const userCheck = await query('SELECT * FROM users WHERE id = $1', [id]);
@@ -481,6 +527,10 @@ router.put('/users/:id', verifyAdmin, async (req, res) => {
       updates.push(`name = $${paramCount++}`);
       values.push(name || null);
     }
+    if (airline !== undefined) {
+      updates.push(`airline = $${paramCount++}`);
+      values.push(airline || null);
+    }
     if (updates.length === 0) {
       return res.status(400).json({
         success: false,
@@ -495,7 +545,7 @@ router.put('/users/:id', verifyAdmin, async (req, res) => {
       UPDATE users 
       SET ${updates.join(', ')} 
       WHERE id = $${paramCount}
-      RETURNING id, username, role, email, name, status, created_at
+      RETURNING id, username, role, email, name, airline, status, created_at
     `;
 
     const result = await query(updateQuery, values);
@@ -696,7 +746,7 @@ const verifyUser = async (req, res, next) => {
 router.get('/profile', verifyUser, async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, username, role, email, name, created_at FROM users WHERE id = $1',
+      'SELECT id, username, role, email, name, airline, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -900,14 +950,21 @@ router.get('/deletion-request/status', verifyUser, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const result = await query(
+    const pending = await query(
       'SELECT id FROM deletion_requests WHERE user_id = $1 AND status = $2',
       [userId, 'pending']
     );
 
+    const rejected = await query(
+      `SELECT id FROM deletion_requests WHERE user_id = $1 AND status = $2
+       ORDER BY handled_at DESC LIMIT 1`,
+      [userId, 'rejected']
+    );
+
     res.json({
       success: true,
-      hasPending: result.rows.length > 0
+      hasPending: pending.rows.length > 0,
+      wasRejected: rejected.rows.length > 0
     });
   } catch (error) {
     console.error('Get deletion request status error:', error);
