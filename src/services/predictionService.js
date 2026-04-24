@@ -9,6 +9,16 @@
 import axios from 'axios';
 import API_BASE_URL from '../config/api';
 
+const CAUSE_DISPLAY_MAP = {
+  'Weather (MUC)': 'Weather',
+  'En-Route Weather': 'Weather',
+  'ATC / Congestion': 'Congestion',
+  'Airline / Turnaround': 'Airline',
+  Reactionary: 'Reactionary',
+  Congestion: 'Congestion',
+  Weather: 'Weather',
+};
+
 // Axios instance with JWT header attached
 const authAxios = () => {
   const token = localStorage.getItem('token');
@@ -295,19 +305,6 @@ const mapFlight = (f, idx) => {
     ? `MUC → ${dest}`
     : `${dest} → MUC`;
 
-  // Heuristic cause fallback — only used when ml_cause is absent
-  // Signals: weather code > 50 (WMO: rain/snow/fog), precipitation > 0
-  // Reactionary: delay ≥ 30 min without weather → likely cascade from prev. flight
-  const isActuallyDelayed = status === 'Minor Delay' || status === 'Major Delay';
-  let likelyCause = null;
-  if (isActuallyDelayed) {
-    const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
-    const isBigDelay = delayMin != null && delayMin >= 30;
-    if (hasWeather)    likelyCause = 'Weather';
-    else if (isBigDelay) likelyCause = 'Reactionary';
-    else               likelyCause = 'Congestion';
-  }
-
   // Convenience booleans derived from the tier-selected delayMin
   const isDelayed15 = delayMin != null && delayMin >= 15;
   const isDelayed30 = delayMin != null && delayMin >= 30;
@@ -331,15 +328,37 @@ const mapFlight = (f, idx) => {
     try { cause_scores = JSON.parse(f.cause_scores); } catch (_) {}
   }
 
+  const isActuallyDelayed = status === 'Minor Delay' || status === 'Major Delay';
+  let displayCause = null;
+
+  if (ml_cause) {
+    // Highest priority: ML batch prediction cause (feature-signal based)
+    displayCause = ml_cause;
+
+  } else if (cause_scores && Object.keys(cause_scores).length > 0) {
+    // Second priority: pick highest-scoring cause from cause_scores
+    const best = Object.entries(cause_scores)
+      .filter(([, v]) => v > 0)
+      .sort(([, a], [, b]) => b - a)[0];
+    if (best) displayCause = best[0];
+
+  } else if (isActuallyDelayed) {
+    // Last resort fallback — only weather signal, no magnitude heuristic
+    const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
+    if (hasWeather) displayCause = 'Weather';
+    else            displayCause = 'Congestion';
+  }
+
+  if (displayCause) {
+    displayCause = CAUSE_DISPLAY_MAP[displayCause] || displayCause;
+  }
+
   // delaySource — the exact tier that produced delayMin and status.
   // Determined during source selection above, not re-derived here.
   //   'confirmed' → Status API (confirmed_delay_min from flight_status_live)
   //   'fids'      → FIDS observed (y_delay_min / dep·arr_best_utc)
   //   'model'     → ML batch prediction (ml_minutes_ui from flight_predictions)
   const delaySource = isConfirmed ? 'confirmed' : delayTier;
-
-  // Cause: prefer ML cause from batch predictions; fall back to heuristic
-  const displayCause = ml_cause || (isActuallyDelayed ? likelyCause : null);
 
   return {
     id:             idx + 1,
@@ -410,6 +429,39 @@ export const fetchWeather = async () => {
     console.warn('[predictionService] fetchWeather failed:', err.message);
     return null;
   }
+};
+
+export const postTrendSnapshot = async (flights) => {
+  try {
+    const delayed = flights.filter(
+      f => f.status === 'Minor Delay' || f.status === 'Major Delay'
+    );
+    const avgDelay = delayed.length > 0
+      ? delayed.reduce((sum, f) => sum + (f.delay_min || 0), 0) / delayed.length
+      : 0;
+
+    await authAxios().post('/predictions/trend-snapshot', {
+      total_flights: flights.length,
+      delayed_flights: delayed.length,
+      avg_delay_min: Math.round(avgDelay * 10) / 10,
+    });
+  } catch (err) {
+    console.warn('Trend snapshot post failed (non-fatal):', err.message);
+  }
+};
+
+export const fetchTrendHistory = async (days = 7) => {
+  try {
+    const { data } = await authAxios().get('/predictions/trend-history', {
+      params: { days },
+    });
+    if (data.success && Array.isArray(data.history)) {
+      return data.history;
+    }
+  } catch (err) {
+    console.warn('Trend history fetch failed (non-fatal):', err.message);
+  }
+  return [];
 };
 
 export const predictFlight = async (number_raw, sched_utc) => {

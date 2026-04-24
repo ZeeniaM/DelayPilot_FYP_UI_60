@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
+const { query } = require('../config/database');
 
 const FASTAPI = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
 
@@ -55,7 +56,12 @@ router.get('/flights', async (req, res) => {
 router.get('/weather', async (req, res) => {
   try {
     const { data } = await axios.get(`${FASTAPI}/weather/current`, { timeout: 8000 });
-    res.json(data);
+    const enriched = {
+      ...data,
+      timestamp: new Date().toISOString(),
+      data_hour: data.timestamp,
+    };
+    res.json(enriched);
   } catch (err) {
     const status = err.response?.status || 502;
     res.status(status).json({ error: err.response?.data?.detail || 'Weather unavailable' });
@@ -123,6 +129,72 @@ router.post('/simulate', async (req, res) => {
       return res.status(404).json({ error: 'Flight not found in pipeline' });
     }
     res.status(status).json({ error: detail });
+  }
+});
+
+// POST /api/predictions/trend-snapshot
+router.post('/trend-snapshot', async (req, res) => {
+  try {
+    const { total_flights, delayed_flights, avg_delay_min } = req.body;
+
+    if (total_flights == null || delayed_flights == null) {
+      return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    const now = new Date();
+    const snapshotHour = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())
+    );
+    const dateOnly = snapshotHour.toISOString().split('T')[0];
+
+    await query(
+      `INSERT INTO delay_trend_history
+         (snapshot_hour, total_flights, delayed_flights, avg_delay_min, date, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (snapshot_hour) DO UPDATE
+         SET total_flights = EXCLUDED.total_flights,
+             delayed_flights = EXCLUDED.delayed_flights,
+             avg_delay_min = EXCLUDED.avg_delay_min,
+             updated_at = NOW()`,
+      [snapshotHour, total_flights, delayed_flights, avg_delay_min || 0, dateOnly]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Trend snapshot error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/predictions/trend-history?days=7
+router.get('/trend-history', async (req, res) => {
+  try {
+    const parsedDays = parseInt(req.query.days || '7', 10);
+    const days = Number.isNaN(parsedDays) ? 7 : Math.min(parsedDays, 30);
+
+    const result = await query(
+      `SELECT
+         snapshot_hour,
+         total_flights,
+         delayed_flights,
+         avg_delay_min,
+         date,
+         ROUND(
+           CASE WHEN total_flights > 0
+             THEN (delayed_flights::float / total_flights) * 100
+             ELSE 0
+           END
+         , 1) AS delay_rate
+       FROM delay_trend_history
+       WHERE snapshot_hour >= NOW() - ($1::int * INTERVAL '1 day')
+       ORDER BY snapshot_hour ASC`,
+      [days]
+    );
+
+    res.json({ success: true, history: result.rows });
+  } catch (err) {
+    console.error('Trend history error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

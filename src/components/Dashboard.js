@@ -13,7 +13,7 @@ import {
   PageContainer, MainContent, ContentArea,
 } from '../styles/components.styles';
 import {
-  fetchFlights, fetchWeather, computeKPIs,
+  fetchFlights, fetchWeather, computeKPIs, postTrendSnapshot, fetchTrendHistory,
 } from '../services/predictionService';
 
 // Major Delay only — one entry per flight, carries full flight object
@@ -42,6 +42,7 @@ const Dashboard = ({
   const [liveFlights, setLiveFlights] = useState(null);
   const [liveWeather, setLiveWeather] = useState(null);
   const [liveKPIs,    setLiveKPIs]    = useState(null);
+  const [trendHistory, setTrendHistory] = useState([]);
   const [loading,     setLoading]     = useState(false);
 
   const load = useCallback(async () => {
@@ -56,8 +57,10 @@ const Dashboard = ({
         setLiveKPIs(computeKPIs(flights));
         // Merge (not replace) alerts in App.js store
         onAlertsUpdate && onAlertsUpdate(buildAlerts(flights));
+        postTrendSnapshot(flights);
       }
       if (weather) setLiveWeather(weather);
+      fetchTrendHistory().then(setTrendHistory).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -73,8 +76,22 @@ const Dashboard = ({
       } catch (error) {
         console.warn('Error auto-refreshing weather:', error);
       }
-    }, 600000);
+    }, 300000);
     return () => clearInterval(weatherInterval);
+  }, []);
+
+  useEffect(() => {
+    const handleVisibility = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const weather = await fetchWeather();
+          if (weather) setLiveWeather(weather);
+        } catch {}
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
   return (
@@ -106,7 +123,7 @@ const Dashboard = ({
               liveWeather={liveWeather}
               userName={userName}
             />
-            <VisualAnalytics liveFlights={liveFlights} />
+            <VisualAnalytics liveFlights={liveFlights} trendHistory={trendHistory} />
             <FlightsTable liveFlights={liveFlights} />
             <QuickActions onTabChange={onTabChange} />
           </ContentArea>

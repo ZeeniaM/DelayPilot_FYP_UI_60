@@ -387,6 +387,27 @@ const initDatabase = async () => {
         ON comment_reactions(comment_id)
     `);
 
+    await queryWithRetry(`
+      CREATE TABLE IF NOT EXISTS delay_trend_history (
+        id SERIAL PRIMARY KEY,
+        snapshot_hour TIMESTAMPTZ NOT NULL,
+        total_flights INTEGER NOT NULL DEFAULT 0,
+        delayed_flights INTEGER NOT NULL DEFAULT 0,
+        avg_delay_min FLOAT,
+        date DATE NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(snapshot_hour)
+      )
+    `);
+
+    await queryWithRetry(`
+      CREATE INDEX IF NOT EXISTS idx_delay_trend_date
+        ON delay_trend_history(date DESC)
+    `);
+
+    console.log('✅ delay_trend_history table ready');
+
     // ─────────────────────────────────────────────────────────────
     // NEW TABLE: system_settings
     //

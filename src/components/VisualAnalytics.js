@@ -27,6 +27,16 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, ArcElement);
 
+const CAUSE_DISPLAY_MAP = {
+  'Weather (MUC)': 'Weather',
+  'En-Route Weather': 'Weather',
+  'ATC / Congestion': 'Congestion',
+  'Airline / Turnaround': 'Airline',
+  Reactionary: 'Reactionary',
+  Congestion: 'Congestion',
+  Weather: 'Weather',
+};
+
 const CHART_COLORS = {
   blue:   '#6495ED',
   orange: '#F5A623',
@@ -61,9 +71,22 @@ const buildTrend = (flights) => {
   }));
 };
 
+const buildExtendedTrend = (history) => {
+  if (!history || history.length === 0) return null;
+  return history.map((row) => ({
+    hour: (() => {
+      const d = new Date(row.snapshot_hour);
+      const dayStr = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
+      const hrStr = `${String(d.getHours()).padStart(2, '0')}:00`;
+      return `${dayStr} ${hrStr}`;
+    })(),
+    total: row.total_flights,
+    delayed: row.delayed_flights,
+    delay_rate: parseFloat(row.delay_rate || 0),
+  }));
+};
+
 // ── Derive cause breakdown ────────────────────────────────────────────────────
-// Priority: ml_cause from batch predictions (real signal).
-// Fallback: classify by delay magnitude as proxy when ml_cause not available.
 const buildCauses = (flights) => {
   const delayedFlights = flights.filter(
     f => f.status === 'Minor Delay' || f.status === 'Major Delay'
@@ -73,15 +96,25 @@ const buildCauses = (flights) => {
   const counts = {};
 
   delayedFlights.forEach(f => {
-    let cause = f.ml_cause || null;
+    let cause = null;
 
-    if (!cause) {
-      // Fallback heuristic: classify by delay band
-      const d = f.delay_min || 0;
-      if (d < 20)      cause = 'Reactionary';
-      else if (d < 45) cause = 'Congestion';
-      else             cause = 'Weather';
+    if (f.ml_cause) {
+      cause = CAUSE_DISPLAY_MAP[f.ml_cause] || f.ml_cause;
+
+    } else if (f.cause_scores && Object.keys(f.cause_scores).length > 0) {
+      const best = Object.entries(f.cause_scores)
+        .filter(([, v]) => v > 0)
+        .sort(([, a], [, b]) => b - a)[0];
+      if (best) {
+        const raw = best[0];
+        cause = CAUSE_DISPLAY_MAP[raw] || raw;
+      }
+
+    } else if (f.likelyCause) {
+      cause = CAUSE_DISPLAY_MAP[f.likelyCause] || f.likelyCause;
     }
+
+    if (!cause) cause = 'Congestion';
 
     counts[cause] = (counts[cause] || 0) + 1;
   });
@@ -92,25 +125,32 @@ const buildCauses = (flights) => {
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
-const VisualAnalytics = ({ liveFlights = null }) => {
+const VisualAnalytics = ({ liveFlights = null, trendHistory = [] }) => {
   const trend  = useMemo(() => liveFlights ? buildTrend(liveFlights)  : null, [liveFlights]);
+  const extendedTrend = useMemo(() => buildExtendedTrend(trendHistory), [trendHistory]);
   const causes = useMemo(() => liveFlights ? buildCauses(liveFlights) : null, [liveFlights]);
 
   const hasFlights = liveFlights && liveFlights.length > 0;
   const hasCauses  = causes && causes.length > 0;
 
   // Trend data — zeros when no data yet
-  const trendData = trend ?? Array.from({ length: 24 }, (_, h) => ({
-    hour: `${String(h).padStart(2, '0')}:00`, total: 0, delayed: 0,
-  }));
+  const trendData = (extendedTrend && extendedTrend.length > 1)
+    ? extendedTrend
+    : (trend ?? Array.from({ length: 24 }, (_, h) => ({
+      hour: `${String(h).padStart(2, '0')}:00`, total: 0, delayed: 0,
+    })));
+
+  const chartTitle = (extendedTrend && extendedTrend.length > 24)
+    ? '7-Day Delay Trend'
+    : "Today's Delay Trend";
 
   // Cause data — show proportional placeholder when no delays detected
   const causeData = hasCauses ? causes : [
     { name: 'No delays detected', value: 1 },
   ];
   const causeColors = hasCauses
-    ? [CHART_COLORS.blue, CHART_COLORS.orange, CHART_COLORS.purple, CHART_COLORS.silver]
-    : ['#e2e8f0'];
+    ? ['rgb(143, 89, 235)', 'rgb(185, 139, 245)', 'rgb(217, 184, 255)', 'rgb(229, 200, 254)', '#ede9fe']
+    : ['#e5e7eb'];
 
   // ── Chart configs ─────────────────────────────────────────────────────────
   const lineData = {
@@ -131,7 +171,7 @@ const VisualAnalytics = ({ liveFlights = null }) => {
     maintainAspectRatio: false,
     plugins: { legend: { display: false }, tooltip: { intersect: false } },
     scales: {
-      x: { ticks: { color: '#666', maxTicksLimit: 8 } },
+      x: { ticks: { color: '#666', maxTicksLimit: chartTitle === '7-Day Delay Trend' ? 10 : 8 } },
       y: {
         ticks: { color: '#666', precision: 0 },
         beginAtZero: true,
@@ -179,7 +219,7 @@ const VisualAnalytics = ({ liveFlights = null }) => {
 
         <AnalyticsCard>
           <AnalyticsTitle>
-            Delay Trend – Today by Hour
+            {chartTitle}
             <span style={{ fontSize: 11, color: '#666', fontWeight: 400, marginLeft: 8 }}>
               {trendSubtitle}
             </span>
