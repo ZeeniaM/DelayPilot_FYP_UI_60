@@ -10,13 +10,15 @@ import axios from 'axios';
 import API_BASE_URL from '../config/api';
 
 const CAUSE_DISPLAY_MAP = {
-  'Weather (MUC)': 'Weather',
-  'En-Route Weather': 'Weather',
-  'ATC / Congestion': 'Congestion',
+  'Weather (MUC)':        'Weather',
+  'En-Route Weather':     'Weather',
+  'ATC / Congestion':     'Congestion',
   'Airline / Turnaround': 'Airline',
-  Reactionary: 'Reactionary',
-  Congestion: 'Congestion',
-  Weather: 'Weather',
+  'Reactionary':          'Reactionary',
+  'Historical Patterns':  'Historical',
+  'Congestion':           'Congestion',
+  'Weather':              'Weather',
+  'Historical':           'Historical',
 };
 
 // Axios instance with JWT header attached
@@ -419,10 +421,21 @@ const mapFlight = (f, idx) => {
     if (best) displayCause = best[0];
 
   } else if (isActuallyDelayed) {
-    // Last resort fallback — only weather signal, no magnitude heuristic
     const hasWeather = (f.wx_muc_weather_code > 50) || (f.wx_muc_precipitation > 0);
-    if (hasWeather) displayCause = 'Weather';
-    else            displayCause = 'Congestion';
+    const schedHour  = f.sched_utc ? new Date(f.sched_utc).getUTCHours() : -1;
+    const fidsDelay  = f.delay_min || 0;
+
+    if (hasWeather) {
+      displayCause = 'Weather';
+    } else if (fidsDelay >= 15) {
+      displayCause = 'Reactionary';
+    } else if (schedHour >= 6 && schedHour < 9) {
+      displayCause = 'Historical';
+    } else if (schedHour >= 17 && schedHour < 21) {
+      displayCause = 'Airline';
+    } else {
+      displayCause = 'Congestion';
+    }
   }
 
   if (displayCause) {

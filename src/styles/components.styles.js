@@ -58,12 +58,20 @@ export const tokens = {
   greyBg:         '#F3F4F6',
 
   /* cause colours */
-  causeWeather:       '#1976D2',
-  causeWeatherBg:     '#E3F2FD',
-  causeCongestion:    '#D32F2F',
-  causeCongestionBg:  '#FFEBEE',
-  causeReactionary:   '#7B1FA2',
-  causeReactionaryBg: '#F3E5F5',
+  causeWeather:           '#0369a1',   /* deep sky blue */
+  causeWeatherBg:         '#e0f2fe',   /* sky-100 */
+
+  causeCongestion:    '#0e7490',    /* cyan-700 */
+  causeCongestionBg:  '#cffafe',    /* cyan-100 */
+
+  causeReactionary:       '#6d28d9',   /* indigo-violet */
+  causeReactionaryBg:     '#ede9fe',   /* violet-100 */
+
+  causeAirline:           '#be185d',   /* deep magenta-pink */
+  causeAirlineBg:         '#fce7f3',   /* pink-100 */
+
+  causeHistorical:        '#0f766e',   /* teal */
+  causeHistoricalBg:      '#ccfbf1',   /* teal-100 */
 
   /* neutrals */
   text:           '#333333',
@@ -710,6 +718,8 @@ export const CauseTag = styled.span`
       case 'Weather':    return tokens.causeWeatherBg;
       case 'Congestion': return tokens.causeCongestionBg;
       case 'Reactionary':return tokens.causeReactionaryBg;
+      case 'Historical': return tokens.causeHistoricalBg;
+      case 'Airline':    return tokens.causeAirlineBg;
       default:           return tokens.greyBg;
     }
   }};
@@ -718,6 +728,8 @@ export const CauseTag = styled.span`
       case 'Weather':    return tokens.causeWeather;
       case 'Congestion': return tokens.causeCongestion;
       case 'Reactionary':return tokens.causeReactionary;
+      case 'Historical': return tokens.causeHistorical;
+      case 'Airline':    return tokens.causeAirline;
       default:           return tokens.grey;
     }
   }};
@@ -1035,6 +1047,8 @@ export const CauseFill = styled.div`
       case 'Weather':     return tokens.causeWeather;
       case 'Congestion':  return tokens.causeCongestion;
       case 'Reactionary': return tokens.causeReactionary;
+      case 'Historical':  return tokens.causeHistorical;
+      case 'Airline':     return tokens.causeAirline;
       default:            return tokens.grey;
     }
   }};

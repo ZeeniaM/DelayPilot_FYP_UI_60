@@ -15,6 +15,7 @@ import {
   NavDropdown, NavDropdownItem,
 } from '../styles/components.styles';
 
+
 const NavigationBar = ({
   userRole, userName, onLogout, activeTab, onTabChange,
   notifCount = 0, hasNewNotif = false, notifOpen = false,

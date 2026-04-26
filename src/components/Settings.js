@@ -497,7 +497,7 @@ const Settings = ({
 
   const [loginLogs, setLoginLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [visibleLogsCount, setVisibleLogsCount] = useState(20);
+  const [logsExpanded, setLogsExpanded] = useState(false);
   const [pipelineLogs, setPipelineLogs] = useState([]);
   const [pipelineWarning, setPipelineWarning] = useState(false);
 
@@ -562,7 +562,7 @@ const Settings = ({
       });
       if (response.data.success) {
         setLoginLogs(response.data.logs || []);
-        setVisibleLogsCount(20);
+        setLogsExpanded(false);
       }
     } catch (error) {
       console.error('Error fetching login logs:', error);
@@ -795,7 +795,7 @@ const Settings = ({
                 </tr>
               </thead>
               <tbody>
-                {loginLogs.slice(0, visibleLogsCount).map(log => (
+                {(logsExpanded ? loginLogs : loginLogs.slice(0, 5)).map(log => (
                   <tr key={log.id}>
                     <td>{log.name || log.username}</td>
                     <td>{log.role}</td>
@@ -804,12 +804,26 @@ const Settings = ({
                 ))}
               </tbody>
             </LogsTable>
-            {loginLogs.length > visibleLogsCount ? (
-              <Button style={{ marginTop: 16 }} onClick={() => setVisibleLogsCount(count => count + 20)}>
-                Show {Math.min(20, loginLogs.length - visibleLogsCount)} more
-              </Button>
-            ) : (
-              <Note>All {loginLogs.length} entries shown</Note>
+            {loginLogs.length > 5 && (
+              <div style={{ textAlign: 'center', marginTop: 10 }}>
+                <button
+                  onClick={() => setLogsExpanded(prev => !prev)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #e1e5e9',
+                    borderRadius: 8,
+                    padding: '6px 18px',
+                    fontSize: 13,
+                    color: '#1A4B8F',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  {logsExpanded
+                    ? '▲ Show Less'
+                    : `▼ Show More (${loginLogs.length - 5} more)`}
+                </button>
+              </div>
             )}
           </>
         )}

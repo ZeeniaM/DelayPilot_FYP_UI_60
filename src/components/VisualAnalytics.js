@@ -28,13 +28,15 @@ import {
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, ArcElement);
 
 const CAUSE_DISPLAY_MAP = {
-  'Weather (MUC)': 'Weather',
-  'En-Route Weather': 'Weather',
-  'ATC / Congestion': 'Congestion',
+  'Weather (MUC)':        'Weather',
+  'En-Route Weather':     'Weather',
+  'ATC / Congestion':     'Congestion',
   'Airline / Turnaround': 'Airline',
-  Reactionary: 'Reactionary',
-  Congestion: 'Congestion',
-  Weather: 'Weather',
+  'Reactionary':          'Reactionary',
+  'Historical Patterns':  'Historical',
+  'Congestion':           'Congestion',
+  'Weather':              'Weather',
+  'Historical':           'Historical',
 };
 
 const CHART_COLORS = {
@@ -148,9 +150,15 @@ const VisualAnalytics = ({ liveFlights = null, trendHistory = [] }) => {
   const causeData = hasCauses ? causes : [
     { name: 'No delays detected', value: 1 },
   ];
-  const causeColors = hasCauses
-    ? ['rgb(143, 89, 235)', 'rgb(185, 139, 245)', 'rgb(217, 184, 255)', 'rgb(229, 200, 254)', '#ede9fe']
-    : ['#e5e7eb'];
+  const PIE_COLORS = [
+    '#0ea5e9',  // sky blue    — Congestion
+    '#f59e0b',  // amber       — Weather
+    '#10b981',  // emerald     — Airline
+    '#f97316',  // orange      — Reactionary
+    '#8b5cf6',  // soft violet — Historical
+    '#ec4899',  // rose        — other/rare
+  ];
+  const causeColors = hasCauses ? PIE_COLORS.slice(0, causeData.length) : ['#e5e7eb'];
 
   // ── Chart configs ─────────────────────────────────────────────────────────
   const lineData = {
@@ -185,8 +193,9 @@ const VisualAnalytics = ({ liveFlights = null, trendHistory = [] }) => {
     datasets: [{
       data:            causeData.map(c => c.value),
       backgroundColor: causeColors,
-      borderWidth:  0,
-      hoverOffset:  6,
+      borderWidth:     2,
+      borderColor:     '#ffffff',
+      hoverOffset:     6,
     }],
   };
 
