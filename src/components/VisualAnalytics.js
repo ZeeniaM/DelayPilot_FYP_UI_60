@@ -135,12 +135,13 @@ const VisualAnalytics = ({ liveFlights = null, trendHistory = [] }) => {
   const hasFlights = liveFlights && liveFlights.length > 0;
   const hasCauses  = causes && causes.length > 0;
 
-  // Trend data — zeros when no data yet
-  const trendData = (extendedTrend && extendedTrend.length > 1)
-    ? extendedTrend
-    : (trend ?? Array.from({ length: 24 }, (_, h) => ({
-      hour: `${String(h).padStart(2, '0')}:00`, total: 0, delayed: 0,
-    })));
+  const trendData = (() => {
+    const raw = (extendedTrend && extendedTrend.length > 1)
+      ? extendedTrend
+      : (trend ?? []);
+    const filtered = raw.filter(h => h.delayed > 0);
+    return filtered.length > 0 ? filtered : raw;
+  })();
 
   const chartTitle = (extendedTrend && extendedTrend.length > 24)
     ? '7-Day Delay Trend'
