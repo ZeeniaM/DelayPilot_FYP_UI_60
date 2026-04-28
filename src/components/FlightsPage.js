@@ -442,99 +442,118 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                   {/* ══ Section 2: Delay Intelligence ════════════════════════════ */}
                   <DrawerSection>
                     <DrawerSectionTitle>Delay Intelligence</DrawerSectionTitle>
-                    {hasML ? (
-                      <PredictionBlock>
+                    <PredictionBlock>
+                      {(() => {
+                        // ── Parse "HH:MM" to minutes from midnight ─────────────────────
+                        const toMins = (str) => {
+                          if (!str) return null;
+                          const clean = String(str).replace(/^~/, '').trim();
+                          if (clean === '—' || clean === '' || clean === 'null') return null;
+                          const parts = clean.split(':');
+                          if (parts.length < 2) return null;
+                          const h = parseInt(parts[0], 10);
+                          const m = parseInt(parts[1], 10);
+                          if (isNaN(h) || isNaN(m)) return null;
+                          return h * 60 + m;
+                        };
 
-                        {/* Compute combined risk score from p15pct and p30pct */}
-                        {(() => {
-                          const combined_risk = Math.round((p15pct * 0.5) + (p30pct * 0.5));
-                          let riskLabel, riskColor, riskBackground;
+                        // ── Compute observed diff from what Section 1 displays ─────────
+                        const sMins = toMins(f.scheduledTime);
+                        const aMins = toMins(
+                          f.actualTime && f.actualTime !== '—' ? f.actualTime : null
+                        );
 
-                          if (combined_risk >= 60) {
-                            riskLabel = 'High Risk';
-                            riskColor = '#dc2626';
-                            riskBackground = '#fee2e2';
-                          } else if (combined_risk >= 35) {
-                            riskLabel = 'Moderate Risk';
-                            riskColor = '#92400e';
-                            riskBackground = '#fef9c3';
-                          } else if (combined_risk > 0) {
-                            riskLabel = 'Low Risk';
-                            riskColor = '#166534';
-                            riskBackground = '#dcfce7';
+                        let obsDiff = null;
+                        if (sMins !== null && aMins !== null) {
+                          let d = aMins - sMins;
+                          if (d < -720) d += 1440;  // midnight crossover guard
+                          if (d >  720) d -= 1440;
+                          obsDiff = Math.round(d);
+                        }
+
+                        // Consider any observed delay >= 5 min as a real delay
+                        const hasObservedDelay = obsDiff !== null && obsDiff >= 5;
+
+                        // ── op_status grouping ──────────────────────────────────────────
+                        // Treat Departed as in-flight (same as EnRoute)
+                        const opS = (f.op_status || '').trim();
+                        const isInFlight = ['EnRoute', 'Landed', 'Departed', 'Arrived',
+                                            'Boarding', 'GateClosed', 'CheckIn', 'Expected',
+                                            'Delayed', 'Cancelled', 'Diverted'].includes(opS);
+
+                        // ── Compute intelligence delay and % ───────────────────────────
+                        let intMins, pct, srcLbl;
+
+                        if (hasObservedDelay) {
+                          if (isInFlight) {
+                            // In-flight confirmed: blend ML toward observed, stay within
+                            // ±15 min of observed but never exceed observed
+                            const ml      = hasML ? Math.round(f.ml_minutes_ui || 0) : 0;
+                            const blended = Math.round(ml * 0.4 + obsDiff * 0.6);
+                            const lower   = Math.max(0, obsDiff - 15);
+                            const upper   = obsDiff;
+                            intMins = Math.min(Math.max(blended, lower), upper);
+                            srcLbl  = 'system estimate (near confirmed delay)';
                           } else {
-                            riskLabel = 'No Delay Risk';
-                            riskColor = '#166534';
-                            riskBackground = '#dcfce7';
+                            // Scheduled with observed delay from FIDS times
+                            intMins = obsDiff;
+                            srcLbl  = 'observed from flight schedule data';
                           }
+                          // % from delay minutes
+                          pct = intMins >= 60 ? 88
+                              : intMins >= 30 ? 72
+                              : intMins >= 15 ? 52
+                              : intMins >= 5  ? 30
+                              : 10;
 
-                          return (
-                            <>
-                              {/* a) Risk label row */}
-                              <PredictionRow>
-                                <PredictionLabel>Delay Risk</PredictionLabel>
-                                <div style={{
-                                  display: 'inline-block',
-                                  backgroundColor: riskBackground,
-                                  color: riskColor,
-                                  fontWeight: 700,
-                                  fontSize: 12,
-                                  padding: '3px 10px',
-                                  borderRadius: 999,
-                                }}>
-                                  {riskLabel}
+                        } else {
+                          // No observed delay — use ML model output
+                          intMins = hasML ? Math.round(f.ml_minutes_ui || 0) : 0;
+                          pct     = hasML
+                            ? Math.round(((f.ml_p_delay_15||0)*0.6 + (f.ml_p_delay_30||0)*0.4)*100)
+                            : 0;
+                          srcLbl  = 'estimated by system model';
+                        }
+
+                        const delayed = intMins >= 5;
+                        let rC, rB, rL;
+                        if      (pct >= 50) { rC='#dc2626'; rB='#fee2e2'; rL='High Risk'; }
+                        else if (pct >= 25) { rC='#d97706'; rB='#fef3c7'; rL='Moderate Risk'; }
+                        else                { rC='#16a34a'; rB='#dcfce7'; rL='Low Risk'; }
+
+                        return (
+                          <>
+                            <div style={{ display:'flex', alignItems:'center',
+                              justifyContent:'space-between', marginBottom:10 }}>
+                              <div>
+                                <div style={{ fontSize:11, color:'#94a3b8', fontWeight:600,
+                                  textTransform:'uppercase', letterSpacing:0.7, marginBottom:4 }}>
+                                  Predicted Delay
                                 </div>
-                              </PredictionRow>
-
-                              {/* b) Combined risk progress bar */}
-                              <div style={{ marginTop: 10 }}>
-                                <ProbBar><ProbFill pct={combined_risk} style={{ backgroundColor: riskColor }} /></ProbBar>
-                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                                  {combined_risk}% delay probability
+                                <div style={{ fontSize:28, fontWeight:800, lineHeight:1,
+                                  color: delayed ? rC : '#16a34a' }}>
+                                  {delayed ? `+${intMins} min` : 'On Time'}
+                                </div>
+                                <div style={{ fontSize:11, color:'#94a3b8', marginTop:4 }}>
+                                  {delayed ? srcLbl : 'no delay indicated'}
                                 </div>
                               </div>
-
-                              {/* c) Delay prediction sentence */}
-                              <div style={{
-                                fontSize: 13,
-                                color: mlDelayed ? riskColor : '#64748b',
-                                fontWeight: mlDelayed ? 600 : 400,
-                                marginTop: 10,
-                              }}>
-                                {mlDelayed
-                                  ? `System estimates approximately ${Math.round(f.ml_minutes_ui)} min delay for this flight.`
-                                  : 'No significant delay currently predicted for this flight.'}
+                              <div style={{ display:'flex', flexDirection:'column',
+                                alignItems:'center', gap:4 }}>
+                                <div style={{ fontSize:20, fontWeight:800, color:rC, lineHeight:1 }}>
+                                  {pct}%
+                                </div>
+                                <span style={{ fontSize:10, fontWeight:700, color:rC,
+                                  background:rB, padding:'2px 7px', borderRadius:999,
+                                  letterSpacing:0.3 }}>
+                                  {rL}
+                                </span>
                               </div>
-
-                              {/* d) Source attribution note when model drives the table row */}
-                              {f.delaySource === 'model' && isDelayed && (
-                                <div style={{ fontSize: 11, color: '#1A4B8F', background: '#eff6ff',
-                                  borderRadius: 6, padding: '5px 8px', marginTop: 8 }}>
-                                  This estimate is the basis for the delay shown in the flights table.
-                                </div>
-                              )}
-                              {f.delaySource === 'model' && !isDelayed && mlDelayed && (
-                                <div style={{ fontSize: 11, color: '#92400e', background: '#fffbeb',
-                                  borderRadius: 6, padding: '5px 8px', marginTop: 8 }}>
-                                  ⚠ Model predicts a delay risk. Flight currently shows On Time in the table
-                                  (below the 15-min classification threshold).
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-
-                      </PredictionBlock>
-                    ) : (
-                      <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>
-                        ML predictions computed after each FIDS refresh cycle.
-                        {f.isConfirmed && f.delay_min != null && (
-                          <span style={{ display: 'block', marginTop: 6, color: '#1A4B8F', fontWeight: 600, fontSize: 12 }}>
-                            Confirmed delay: {apiDelayDisplay} (Flight Status API)
-                          </span>
-                        )}
-                      </div>
-                    )}
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </PredictionBlock>
                   </DrawerSection>
 
                   {/* ══ Section 3: Delay Cause ═══════════════════════════════════ */}
