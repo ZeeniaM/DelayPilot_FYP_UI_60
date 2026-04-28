@@ -430,7 +430,7 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                       </PredictionRow>
 
                       <PredictionRow>
-                        <PredictionLabel>Delay Source</PredictionLabel>
+                        <PredictionLabel>Source</PredictionLabel>
                         <PredictionValue style={{ color: '#64748b', fontSize: 11 }}>
                           {sourceNote}
                         </PredictionValue>
@@ -576,9 +576,6 @@ const FlightsPage = ({ userRole = 'APOC', userName, onLogout, activeTab, onTabCh
                                 : <span style={{ color: '#94a3b8' }}>Undetermined</span>}
                             </PredictionValue>
                           </PredictionRow>
-                          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                            {f.ml_cause ? 'Based on model feature signals' : 'Based on available flight data'}
-                          </div>
                         </div>
 
                         {/* Feature-signal contribution bars */}
