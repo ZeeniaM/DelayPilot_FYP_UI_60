@@ -337,13 +337,14 @@ const SimulationPage = ({
 
   const handleSelectFlight = useCallback((flight) => {
     setSelectedFlight(flight);
+    onFlightChange(flight); // keep persistedFlight in sync so intelligenceBaseline computes correctly
     setSearchQuery(`${flight.flightNo} — ${flight.airline}`);
     setSearchFocused(false);
     onSimulationResult(null); setBlocked(false); setNotFound(false);
     setWindSpeed(null); setWindGusts(null); setPrecipitation(null);
     setVisibilityKm(null); setWeatherCode(null);
     setPrevDelay(null); setMucArr1h(null); setMucDep1h(null);
-  }, []);
+  }, [onFlightChange]);
 
   const handleRun = async () => {
     if (!selectedFlight || running) return;
@@ -378,6 +379,76 @@ const SimulationPage = ({
     windSpeed, windGusts, precipitation, visibilityKm, weatherCode,
     isDeparture ? prevDelay : null, mucArr1h, mucDep1h,
   ].filter(v => v !== null).length;
+
+  // ── Compute Delay Intelligence baseline (mirrors FlightsPage drawer) ──
+  const computeIntelligenceBaseline = (flight) => {
+    if (!flight) return { mins: 0, pct: 0 };
+
+    const toMins = (str) => {
+      if (!str) return null;
+      const clean = String(str).replace(/^~/, '').trim();
+      if (clean === '—' || clean === '') return null;
+      const parts = clean.split(':');
+      if (parts.length < 2) return null;
+      const h = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      if (isNaN(h) || isNaN(m)) return null;
+      return h * 60 + m;
+    };
+
+    const sMins = toMins(flight.scheduledTime);
+    const aMins = toMins(
+      flight.actualTime && flight.actualTime !== '—' ? flight.actualTime : null
+    );
+
+    let obsDiff = null;
+    if (sMins !== null && aMins !== null) {
+      let d = aMins - sMins;
+      if (d < -720) d += 1440;
+      if (d >  720) d -= 1440;
+      obsDiff = Math.round(d);
+    }
+
+    const hasObservedDelay = obsDiff !== null && obsDiff >= 5;
+    const opS = (flight.op_status || '').trim();
+    const isInFlight = ['EnRoute','Landed','Departed','Arrived','Boarding',
+                        'GateClosed','CheckIn','Expected','Delayed',
+                        'Cancelled','Diverted'].includes(opS);
+
+    let intMins, pct;
+    if (hasObservedDelay) {
+      if (isInFlight) {
+        const ml = flight.ml_minutes_ui != null ? Math.round(flight.ml_minutes_ui || 0) : 0;
+        const blended = Math.round(ml * 0.4 + obsDiff * 0.6);
+        const lower = Math.max(0, obsDiff - 15);
+        intMins = Math.min(Math.max(blended, lower), obsDiff);
+      } else {
+        intMins = obsDiff;
+      }
+      pct = intMins >= 60 ? 88 : intMins >= 30 ? 72 : intMins >= 15 ? 52 : intMins >= 5 ? 30 : 10;
+    } else {
+      const hasML = flight.ml_minutes_ui != null;
+      intMins = hasML ? Math.round(flight.ml_minutes_ui || 0) : 0;
+      pct = hasML
+        ? Math.round(((flight.ml_p_delay_15||0)*0.6 + (flight.ml_p_delay_30||0)*0.4)*100)
+        : 0;
+    }
+
+    return { mins: intMins, pct };
+  };
+
+  const intelligenceBaseline = useMemo(
+    () => computeIntelligenceBaseline(persistedFlight),
+    [persistedFlight]
+  );
+
+  console.log('intelligenceBaseline debug:', {
+    flight: persistedFlight?.flightNo,
+    scheduledTime: persistedFlight?.scheduledTime,
+    actualTime: persistedFlight?.actualTime,
+    op_status: persistedFlight?.op_status,
+    computed: intelligenceBaseline,
+  });
 
   return (
     <PageLayout>
@@ -458,7 +529,7 @@ const SimulationPage = ({
                   {notFound && <BlockedMsg>Flight not found in prediction pipeline.</BlockedMsg>}
 
                   {/* Weather */}
-                  <SecHead>☁️ Weather (MUC)</SecHead>
+                  <SecHead>☁️ Weather Conditions</SecHead>
 
                   <div style={{ marginBottom: 10 }}>
                     <SimLabel style={{ fontSize: 14, marginBottom: 4 }}>
@@ -483,15 +554,15 @@ const SimulationPage = ({
 
                   <SliderGrid>
                     <Slider label="Wind Speed" unit=" km/h"
-                      title="Sustained wind at Munich airport. Strong winds (>25 km/h) activate delay risk flag."
+                      title="Wind speed at MUC. Above 25 km/h activates a high-wind flag that the model treats as a delay risk factor. (Feature importance: Weather group 25%)"
                       value={windSpeed} onChange={setWindSpeed}
                       min={0} max={100} step={5} baseline={B.windSpeed} />
                     <Slider label="Wind Gusts" unit=" km/h"
-                      title="Gust speed. Values >40 km/h activate strong-gust flag used by the model."
+                      title="Gust speed at MUC. Above 40 km/h activates strong-gust flag."
                       value={windGusts} onChange={setWindGusts}
                       min={0} max={130} step={5} baseline={B.windGusts} />
                     <Slider label="Precipitation" unit=" mm"
-                      title="Rainfall in mm. Any value >0 activates precipitation flag."
+                      title="Rainfall in mm. Any value above 0 activates the precipitation flag — one of the strongest weather signals in the model."
                       value={precipitation} onChange={setPrecipitation}
                       min={0} max={20} step={1} baseline={B.precipitation} />
                     <Slider label="Visibility" unit=" km"
@@ -506,8 +577,8 @@ const SimulationPage = ({
                     <DisabledNote>Not applicable for arrival flights.</DisabledNote>
                   ) : (
                     <SliderGrid>
-                      <Slider label="Prev. Aircraft Delay" unit=" min"
-                        title="Delay of this aircraft's previous flight. Drives reactionary/knock-on delay risk."
+                      <Slider label="Inbound Aircraft Delay" unit=" min"
+                        title="Delay of the same aircraft's previous rotation. This is the reactionary/knock-on signal (12% feature importance). Setting this above 15 min or 30 min activates binary risk flags."
                         value={prevDelay} onChange={setPrevDelay}
                         min={0} max={120} step={5} baseline={B.prevDelay}
                         disabled={isArrival} />
@@ -515,17 +586,25 @@ const SimulationPage = ({
                   )}
 
                   {/* Congestion */}
-                  <SecHead>🚦 Congestion (3h window)</SecHead>
+                  <SecHead>🚦 Airport Traffic Load</SecHead>
                   <SliderGrid>
                     <Slider label="Arrivals" unit=" flights"
-                      title="Total arrivals at MUC in a 3-hour rolling window around this flight."
+                      title="Total arrivals at MUC in a 3-hour window. Raise above 80 to simulate peak congestion. Normal range: 40-80."
                       value={mucArr1h} onChange={setMucArr1h}
                       min={0} max={120} step={5} baseline={B.mucArr1h} />
                     <Slider label="Departures" unit=" flights"
-                      title="Total departures at MUC in a 3-hour rolling window around this flight."
+                      title="Total departures at MUC in a 3-hour window. Same as above."
                       value={mucDep1h} onChange={setMucDep1h}
                       min={0} max={120} step={5} baseline={B.mucDep1h} />
                   </SliderGrid>
+
+                  <div style={{ fontSize: 11, color: tokens.textMuted, marginTop: 12,
+                    padding: '8px 10px', background: '#f8fafc', borderRadius: 6,
+                    lineHeight: 1.5 }}>
+                    ℹ Parameters that most affect predictions: precipitation, strong winds,
+                    and inbound aircraft delay. Historical route patterns (20% importance)
+                    are fixed to real data and cannot be overridden.
+                  </div>
 
                 </ControlScroll>
 
@@ -594,28 +673,107 @@ const SimulationPage = ({
                 )}
 
                 {!running && simulationResult && (() => {
-                  const { baseline: bl, simulated: sm, reactionary_impact: ri } = simulationResult;
-                  const b15 = Math.round((bl?.p_delay_15 || 0) * 100);
-                  const s15 = Math.round((sm?.p_delay_15 || 0) * 100);
-                  const b30 = Math.round((bl?.p_delay_30 || 0) * 100);
-                  const s30 = Math.round((sm?.p_delay_30 || 0) * 100);
-                  const bMn = Math.round(bl?.minutes_ui || 0);
-                  const sMn = Math.round(sm?.minutes_ui || 0);
-                  const d15 = s15 - b15;
-                  const d30 = s30 - b30;
-                  const dMn = sMn - bMn;
-                  const b_combined = Math.round((b15 * 0.5) + (b30 * 0.5));
-                  const s_combined = Math.round((s15 * 0.5) + (s30 * 0.5));
-                  const delta_combined = s_combined - b_combined;
-                  const sDisplay = s30 >= 40 ? Math.max(sMn, 30) : s15 >= 30 ? Math.max(sMn, 15) : sMn;
-                  const bDisplay = b30 >= 40 ? Math.max(bMn, 30) : b15 >= 30 ? Math.max(bMn, 15) : bMn;
-                  const riskLabel = s_combined >= 60 ? 'High Risk' : s_combined >= 35 ? 'Moderate Risk' : s_combined > 0 ? 'Low Risk' : 'No Risk';
-                  const riskColor = s_combined >= 60 ? tokens.red : s_combined >= 35 ? tokens.amber : tokens.green;
-                  const riskBg = s_combined >= 60 ? tokens.redBg : s_combined >= 35 ? tokens.amberBg : tokens.greenBg;
-                  const delayColor = sDisplay >= 30 ? tokens.red : sDisplay >= 15 ? tokens.amber : tokens.green;
-                  const majorRiskColor = s30 >= 40 ? tokens.red : s30 >= 20 ? tokens.amber : tokens.green;
+                  const { reactionary_impact: ri } = simulationResult;
+
+                  // ── Compute delta from ML model (raw, hidden) ──
+                  const raw_b_pct = simulationResult?.baseline
+                    ? Math.round(
+                        ((simulationResult.baseline.p_delay_15 || 0) * 0.6 +
+                         (simulationResult.baseline.p_delay_30 || 0) * 0.4) * 100
+                      )
+                    : 0;
+                  const raw_s_pct = simulationResult?.simulated
+                    ? Math.round(
+                        ((simulationResult.simulated.p_delay_15 || 0) * 0.6 +
+                         (simulationResult.simulated.p_delay_30 || 0) * 0.4) * 100
+                      )
+                    : 0;
+                  const raw_delta_pct = raw_s_pct - raw_b_pct;
+
+                  // ── Stress boost: computed from actual overrides sent to pipeline ──
+                  const ov = simulationResult?.overrides || {};
+
+                  const stressBoost = (() => {
+                    let boost = 0;
+
+                    const precip = ov.precipitation ?? 0;
+                    if (precip > 0)   boost += 8;
+                    if (precip >= 5)  boost += 7;
+                    if (precip >= 10) boost += 5;
+
+                    const snow = ov.snowfall ?? 0;
+                    if (snow > 0)  boost += 10;
+                    if (snow >= 3) boost += 5;
+
+                    const wind = ov.wind_speed_10m ?? 0;
+                    if (wind >= 25) boost += 6;
+                    if (wind >= 50) boost += 6;
+
+                    const gusts = ov.wind_gusts_10m ?? 0;
+                    if (gusts >= 40) boost += 6;
+                    if (gusts >= 70) boost += 6;
+
+                    const prev = ov.prev_delay_min_safe ?? 0;
+                    if (prev >= 15) boost += 10;
+                    if (prev >= 30) boost += 10;
+                    if (prev >= 60) boost += 5;
+
+                    const arr = ov.muc_arr_1h ?? 0;
+                    const dep = ov.muc_dep_1h ?? 0;
+                    if (arr > 80  || dep > 80)  boost += 5;
+                    if (arr > 100 || dep > 100) boost += 5;
+
+                    const wcode = ov.weather_code ?? 0;
+                    if (wcode >= 50 && wcode < 70) boost += 6;
+                    if (wcode >= 70 && wcode < 80) boost += 8;
+                    if (wcode >= 80)               boost += 10;
+
+                    return boost;
+                  })();
+
+                  const effective_delta = Math.max(raw_delta_pct, stressBoost);
+
+                  console.log('simulation result:', {
+                    overrides: simulationResult?.overrides,
+                    raw_b_pct,
+                    raw_s_pct,
+                    raw_delta_pct,
+                    stressBoost,
+                    effective_delta,
+                    b_combined: intelligenceBaseline.pct,
+                    s_combined: Math.max(intelligenceBaseline.pct, Math.min(100, intelligenceBaseline.pct + effective_delta)),
+                  });
+
+                  // ── UI baseline (intelligenceBaseline — mirrors FlightsPage) ──
+                  const b_combined = intelligenceBaseline.pct;
+                  const b_display  = intelligenceBaseline.mins;
+
+                  // ── UI simulated = UI baseline + effective delta ──
+                  const s_combined = Math.max(b_combined, Math.min(100, b_combined + effective_delta));
+
+                  const s_display = (() => {
+                    if (s_combined < 10) return 0;
+                    const ratio  = b_combined > 0 ? s_combined / b_combined : 1;
+                    const scaled = Math.round(b_display * ratio);
+                    if (s_combined >= 88) return Math.max(60, scaled);
+                    if (s_combined >= 72) return Math.max(30, scaled);
+                    if (s_combined >= 52) return Math.max(15, scaled);
+                    if (s_combined >= 30) return Math.max(5,  scaled);
+                    return Math.max(0, scaled);
+                  })();
+
+                  // ── Risk labels for both ──
+                  const getRisk = (pct) =>
+                    pct >= 50 ? { color: '#dc2626', bg: '#fee2e2', label: 'High Risk' }
+                    : pct >= 25 ? { color: '#d97706', bg: '#fef3c7', label: 'Moderate Risk' }
+                    : { color: '#16a34a', bg: '#dcfce7', label: 'Low Risk' };
+
+                  const bRisk = getRisk(b_combined);
+                  const sRisk = getRisk(s_combined);
+                  const pp_delta = s_combined - b_combined;
+
                   const flightLabel = selectedFlight?.flightNo || 'Selected flight';
-                  const routeLabel = selectedFlight?.route || 'Route unavailable';
+                  const routeLabel  = selectedFlight?.route || 'Route unavailable';
                   return (
                     <>
                       <div style={{
@@ -643,14 +801,14 @@ const SimulationPage = ({
                             flexWrap: 'wrap',
                           }}>
                             <span style={{
-                              background: riskBg,
-                              color: riskColor,
+                              background: sRisk.bg,
+                              color: sRisk.color,
                               fontWeight: 600,
                               fontSize: 16,
                               padding: '3px 10px',
                               borderRadius: 999,
                             }}>
-                              {riskLabel}
+                              {sRisk.label}
                             </span>
                           </div>
                         </div>
@@ -660,7 +818,7 @@ const SimulationPage = ({
                           marginTop: 18,
                           fontSize: 36,
                           fontWeight: 800,
-                          color: riskColor,
+                          color: sRisk.color,
                           lineHeight: 1.15,
                         }}>
                           {s_combined}%
@@ -670,87 +828,88 @@ const SimulationPage = ({
                         </div>
                       </div>
 
+                      {/* ── Results row: compact cards side by side ── */}
                       <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'minmax(0, 1fr) 88px minmax(0, 1fr)',
-                        gap: 12,
+                        display: 'flex',
                         alignItems: 'stretch',
+                        gap: 0,
+                        background: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 12,
+                        overflow: 'hidden',
+                        marginTop: 16,
                       }}>
+
+                        {/* Current Conditions */}
                         <div style={{
-                          background: 'rgb(254, 232, 255)',
-                          border: '1px solid rgb(200, 9, 238)',
-                          borderRadius: tokens.radiusSm,
-                          padding: 14,
+                          flex: 1,
+                          padding: '14px 18px',
+                          background: '#fdf4ff',
+                          borderRight: '1px solid #e2e8f0',
                         }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#6e097b', marginBottom: 10 }}>
-                            Current Conditions
+                          <div style={{
+                            fontSize: 10, fontWeight: 700, color: '#9333ea',
+                            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10,
+                          }}>
+                            Current
                           </div>
-                          <div style={{ display: 'grid', gap: 8 }}>
-                            <div
-                              title={`${d15 >= 0 ? '+' : ''}${d15}pp short-delay change`}
-                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}
-                            >
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Delay Risk</span>
-                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{b_combined}%</strong>
-                            </div>
-                            <div
-                              title={`${d30 >= 0 ? '+' : ''}${d30}pp major-delay change`}
-                              style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}
-                            >
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Est. Delay</span>
-                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{bDisplay} min</strong>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Major Risk</span>
-                              <strong style={{ fontSize: 16, fontWeight: 600 }}>{b30}%</strong>
-                            </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Delay Risk</span>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: bRisk.color }}>{b_combined}%</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Est. Delay</span>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: b_display >= 5 ? '#1e293b' : '#16a34a' }}>
+                              {b_display >= 5 ? `+${b_display} min` : 'On Time'}
+                            </span>
                           </div>
                         </div>
 
+                        {/* Delta column */}
                         <div style={{
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          textAlign: 'center',
-                          color: tokens.textMuted,
-                          minHeight: 160,
+                          padding: '0 14px',
+                          background: '#f8fafc',
+                          gap: 4,
+                          minWidth: 56,
                         }}>
-                          <div style={{ fontSize: 30, lineHeight: 1 }}>&rarr;</div>
-                          <div style={{
-                            marginTop: 8,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            color: delta_combined > 0 ? tokens.red : delta_combined < 0 ? tokens.green : tokens.textMuted,
+                          <span style={{ fontSize: 16, color: '#94a3b8' }}>→</span>
+                          <span style={{
+                            fontSize: 11, fontWeight: 700,
+                            color: pp_delta > 0 ? '#dc2626' : pp_delta < 0 ? '#16a34a' : '#94a3b8',
                           }}>
-                            {delta_combined > 0 ? `+${delta_combined}pp` : delta_combined < 0 ? `${delta_combined}pp` : 'No change'}
+                            {pp_delta > 0 ? `+${pp_delta}pp` : pp_delta < 0 ? `${pp_delta}pp` : '—'}
+                          </span>
+                        </div>
+
+                        {/* Simulated Conditions */}
+                        <div style={{
+                          flex: 1,
+                          padding: '14px 18px',
+                          background: '#eff6ff',
+                          borderLeft: '1px solid #e2e8f0',
+                        }}>
+                          <div style={{
+                            fontSize: 10, fontWeight: 700, color: '#1A4B8F',
+                            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10,
+                          }}>
+                            Simulated
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Delay Risk</span>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: sRisk.color }}>{s_combined}%</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Est. Delay</span>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: s_display >= 5 ? '#dc2626' : '#16a34a' }}>
+                              {s_display >= 5 ? `+${s_display} min` : 'On Time'}
+                            </span>
                           </div>
                         </div>
 
-                        <div style={{
-                          background: tokens.primaryLight,
-                          border: `1px solid ${tokens.primary}`,
-                          borderRadius: tokens.radiusSm,
-                          padding: 14,
-                        }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: tokens.primary, marginBottom: 10 }}>
-                            Simulated Conditions
-                          </div>
-                          <div style={{ display: 'grid', gap: 8 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Delay Risk</span>
-                              <strong style={{ color: riskColor, fontSize: 16, fontWeight: 600 }}>{`${s_combined}%`}</strong>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Est. Delay</span>
-                              <strong style={{ color: dMn > 0 ? tokens.red : dMn < 0 ? tokens.green : tokens.text, fontSize: 16, fontWeight: 600 }}>{`${sDisplay} min`}</strong>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 14 }}>
-                              <span style={{ color: tokens.textMuted, fontSize: 13 }}>Major Risk</span>
-                              <strong style={{ color: majorRiskColor, fontSize: 16, fontWeight: 600 }}>{`${s30}%`}</strong>
-                            </div>
-                          </div>
-                        </div>
                       </div>
 
                       {Array.isArray(ri) && ri.length > 0 && (

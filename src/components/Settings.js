@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import NavigationBar from './NavigationBar';
@@ -491,6 +491,12 @@ const Settings = ({
   const [intervalMessage, setIntervalMessage] = useState('');
   const [intervalSaving, setIntervalSaving] = useState(false);
 
+  const [schedulerEnabled, setSchedulerEnabled] = useState(true);
+  const [schedulerCountdown, setSchedulerCountdown] = useState(null);
+  const [schedulerToggling, setSchedulerToggling] = useState(false);
+  const [schedulerInterval, setSchedulerInterval] = useState(30);
+  const schedulerPollRef = useRef(null);
+
   const [permissions, setPermissions] = useState(defaultPermissions);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
@@ -607,9 +613,29 @@ const Settings = ({
     }
   }, []);
 
+  const fetchSchedulerStatus = useCallback(async () => {
+    try {
+      const res = await axios.get(
+        `${API_BASE_URL}/scheduler/status`,
+        { headers: authHeaders() }
+      );
+      setSchedulerEnabled(res.data.enabled);
+      setSchedulerCountdown(res.data.seconds_remaining);
+      setSchedulerInterval(res.data.interval_minutes || 30);
+    } catch (e) {
+      // Non-fatal — pipeline may be offline
+    }
+  }, []);
+
   useEffect(() => {
     fetchOverview();
   }, [fetchOverview]);
+
+  useEffect(() => {
+    fetchSchedulerStatus();
+    schedulerPollRef.current = setInterval(fetchSchedulerStatus, 5000);
+    return () => clearInterval(schedulerPollRef.current);
+  }, [fetchSchedulerStatus]);
 
   useEffect(() => {
     if (activeTab === 'permissions' && !permissionsLoaded) {
@@ -638,6 +664,24 @@ const Settings = ({
       setIntervalMessage('Error saving refresh interval');
     } finally {
       setIntervalSaving(false);
+    }
+  };
+
+  const handleSchedulerToggle = async () => {
+    setSchedulerToggling(true);
+    try {
+      const endpoint = schedulerEnabled ? 'disable' : 'enable';
+      await axios.post(
+        `${API_BASE_URL}/scheduler/${endpoint}`,
+        {},
+        { headers: authHeaders() }
+      );
+      setSchedulerEnabled(!schedulerEnabled);
+      await fetchSchedulerStatus();
+    } catch (e) {
+      console.error('Scheduler toggle failed:', e.message);
+    } finally {
+      setSchedulerToggling(false);
     }
   };
 
@@ -715,6 +759,72 @@ const Settings = ({
           Controls how often the data pipeline fetches live flight and weather data.
           Minimum 5 minutes. Takes effect on next server restart.
         </Note>
+        <div style={{
+          marginTop: 20,
+          paddingTop: 16,
+          borderTop: '1px solid #e5e7eb',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 12,
+        }}>
+          <div>
+            <div style={{
+              fontSize: 13, fontWeight: 600, color: '#1e2a3a',
+              marginBottom: 4,
+            }}>
+              Scheduler
+            </div>
+            <div style={{ fontSize: 12, color: '#64748b' }}>
+              {schedulerEnabled
+                ? schedulerCountdown !== null
+                  ? `Next refresh in ${Math.floor(schedulerCountdown / 60)}m ${schedulerCountdown % 60}s`
+                  : 'Running — next refresh calculating...'
+                : 'Disabled — dashboard shows last fetched data'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {schedulerEnabled && schedulerCountdown !== null && (
+              <div style={{
+                background: '#f0fdf4',
+                border: '1px solid #86efac',
+                borderRadius: 20,
+                padding: '3px 12px',
+                fontSize: 12,
+                fontWeight: 700,
+                color: '#15803d',
+                fontVariantNumeric: 'tabular-nums',
+                minWidth: 90,
+                textAlign: 'center',
+              }}>
+                {Math.floor(schedulerCountdown / 60).toString().padStart(2,'0')}:
+                {(schedulerCountdown % 60).toString().padStart(2,'0')}
+              </div>
+            )}
+            <button
+              onClick={handleSchedulerToggle}
+              disabled={schedulerToggling}
+              style={{
+                padding: '8px 20px',
+                borderRadius: 8,
+                border: 'none',
+                cursor: schedulerToggling ? 'not-allowed' : 'pointer',
+                fontWeight: 600,
+                fontSize: 13,
+                background: schedulerEnabled ? '#fee2e2' : '#dcfce7',
+                color:      schedulerEnabled ? '#b91c1c' : '#15803d',
+                transition: 'all 0.2s',
+              }}
+            >
+              {schedulerToggling
+                ? '...'
+                : schedulerEnabled
+                ? 'Disable Scheduler'
+                : 'Enable Scheduler'}
+            </button>
+          </div>
+        </div>
       </Card>
     </LogsStack>
   );

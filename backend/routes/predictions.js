@@ -180,10 +180,10 @@ router.get('/trend-history', async (req, res) => {
          avg_delay_min,
          date,
          ROUND(
-           CASE WHEN total_flights > 0
+           (CASE WHEN total_flights > 0
              THEN (delayed_flights::float / total_flights) * 100
              ELSE 0
-           END
+           END)::numeric
          , 1) AS delay_rate
        FROM delay_trend_history
        WHERE snapshot_hour >= NOW() - ($1::int * INTERVAL '1 day')

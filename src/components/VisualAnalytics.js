@@ -145,7 +145,7 @@ const VisualAnalytics = ({ liveFlights = null, trendHistory = [] }) => {
 
   const chartTitle = (extendedTrend && extendedTrend.length > 24)
     ? '7-Day Delay Trend'
-    : "Today's Delay Trend";
+    : "Delay Trend";
 
   // Cause data — show proportional placeholder when no delays detected
   const causeData = hasCauses ? causes : [

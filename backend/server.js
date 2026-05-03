@@ -44,6 +44,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/predictions', require('./routes/predictions'));
 app.use('/api/mitigation', require('./routes/mitigation'));
 app.use("/api/admin/retrain", require("./routes/retrain"));
+app.use("/api/scheduler", require("./routes/scheduler"));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
