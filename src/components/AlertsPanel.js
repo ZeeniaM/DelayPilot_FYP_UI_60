@@ -1,4 +1,4 @@
-/**
+  /**
  * AlertsPanel.js  — COMPLETE REPLACEMENT
  * ─────────────────────────────────────────────────────────────────
  * Replace the entire existing AlertsPanel.js with this file.

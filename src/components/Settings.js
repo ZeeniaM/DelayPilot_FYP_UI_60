@@ -4,6 +4,7 @@ import axios from 'axios';
 import NavigationBar from './NavigationBar';
 import { PageLayout } from './PageLayout';
 import API_BASE_URL from '../config/api';
+import RetrainPanel from "./RetrainPanel";
 
 const PageContainer = styled.div`
   min-height: 100vh;
@@ -380,7 +381,8 @@ const defaultPermissions = {
 const tabConfig = [
   { id: 'overview', label: 'Overview', icon: 'overview' },
   { id: 'permissions', label: 'Permissions', icon: 'shield' },
-  { id: 'logs', label: 'System Logs', icon: 'logs' }
+  { id: 'login_logs', label: 'Login Logs', icon: 'logs' },
+  { id: 'pipeline_models', label: 'Pipeline & Models', icon: 'logs' }
 ];
 
 const authHeaders = () => ({
@@ -613,8 +615,10 @@ const Settings = ({
     if (activeTab === 'permissions' && !permissionsLoaded) {
       fetchPermissions();
     }
-    if (activeTab === 'logs') {
+    if (activeTab === 'login_logs') {
       fetchLoginLogs();
+    }
+    if (activeTab === 'pipeline_models') {
       fetchPipelineLogs();
     }
   }, [activeTab, fetchLoginLogs, fetchPermissions, fetchPipelineLogs, permissionsLoaded]);
@@ -771,7 +775,7 @@ const Settings = ({
     </Card>
   );
 
-  const renderSystemLogs = () => (
+  const renderLoginLogs = () => (
     <LogsStack>
       <Card>
         <SectionHeader>
@@ -828,7 +832,11 @@ const Settings = ({
           </>
         )}
       </Card>
+    </LogsStack>
+  );
 
+  const renderPipelineModels = () => (
+    <LogsStack>
       <Card>
         <SectionHeader>
           <SectionTitle>Pipeline Activity</SectionTitle>
@@ -892,12 +900,17 @@ const Settings = ({
           </div>
         </InfoRows>
       </Card>
+
+      <div style={{ marginTop: 32, width: "100%" }}>
+        <RetrainPanel />
+      </div>
     </LogsStack>
   );
 
   const renderActiveTab = () => {
     if (activeTab === 'permissions') return renderPermissions();
-    if (activeTab === 'logs') return renderSystemLogs();
+    if (activeTab === 'login_logs') return renderLoginLogs();
+    if (activeTab === 'pipeline_models') return renderPipelineModels();
     return renderOverview();
   };
 
@@ -939,7 +952,7 @@ const Settings = ({
                   </TabButton>
                 ))}
               </Sidebar>
-              <div>{renderActiveTab()}</div>
+              <div style={{ width: "100%" }}>{renderActiveTab()}</div>
             </SettingsLayout>
           </ContentArea>
         </MainContent>
